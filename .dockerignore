@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+.env
+.idea
+.claude
+.agents
+tools
+__pycache__
+**/__pycache__
+*.pyc
+skills-lock.json
+Dockerfile
+.dockerignore
