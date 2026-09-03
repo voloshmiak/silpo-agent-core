@@ -32,7 +32,8 @@ COPY --from=builder --chown=app:app /app/silpofit ./silpofit
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8000
 
 USER app
 
@@ -41,4 +42,8 @@ EXPOSE 8000
 # GEMINI_API_KEY and SILPOFIT_SERVICE_TOKENS are read from the environment at
 # startup (see silpofit/config.py) — pass them with `docker run -e` / --env-file,
 # never bake them into the image.
-CMD ["uvicorn", "silpofit.server:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# Cloud Run injects PORT itself (usually 8080) and requires the container to
+# listen on it, so this must read $PORT at runtime rather than hardcode it —
+# shell form (not exec-array form) so the variable actually expands.
+CMD uvicorn silpofit.server:app --host 0.0.0.0 --port "$PORT"
