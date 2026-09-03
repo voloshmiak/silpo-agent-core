@@ -5,9 +5,11 @@ authorization, profiles and history, and sends everything the agent needs in
 one request. The agent holds nothing between requests — no tokens, no plans.
 """
 
-from typing import Any, Literal
+import json
+from typing import Any, AsyncGenerator, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -79,7 +81,34 @@ async def health() -> dict[str, str]:
 
 @app.post("/plan", dependencies=[Depends(require_service_token)], response_model=AgentResponse)
 async def plan(body: PlanRequest) -> AgentResponse:
-    prompt = build_plan_prompt(
+    return await _run(body.silpo_access_token, _plan_prompt(body), apply=body.apply)
+
+
+@app.post("/review", dependencies=[Depends(require_service_token)], response_model=AgentResponse)
+async def review(body: ReviewRequest) -> AgentResponse:
+    prompt = build_review_prompt(body.previous_plan)
+    return await _run(body.silpo_access_token, prompt, apply=False)
+
+
+@app.post("/plan/stream", dependencies=[Depends(require_service_token)])
+async def plan_stream(body: PlanRequest) -> StreamingResponse:
+    """SSE: `tool_call`/`tool_result` events while the agent is calling MCP
+    tools, `token` events while it writes the final answer, then one `plan`
+    event with the finalized plan (or `error` if the run fails)."""
+    return StreamingResponse(
+        _sse(body.silpo_access_token, _plan_prompt(body), apply=body.apply),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/review/stream", dependencies=[Depends(require_service_token)])
+async def review_stream(body: ReviewRequest) -> StreamingResponse:
+    prompt = build_review_prompt(body.previous_plan)
+    return StreamingResponse(_sse(body.silpo_access_token, prompt, apply=False), media_type="text/event-stream")
+
+
+def _plan_prompt(body: PlanRequest) -> str:
+    return build_plan_prompt(
         weight_kg=body.profile.weight_kg,
         target_weight_kg=body.profile.target_weight_kg,
         height_cm=body.profile.height_cm,
@@ -91,13 +120,6 @@ async def plan(body: PlanRequest) -> AgentResponse:
         note=body.note,
         previous_plan=body.previous_plan,
     )
-    return await _run(body.silpo_access_token, prompt, apply=body.apply)
-
-
-@app.post("/review", dependencies=[Depends(require_service_token)], response_model=AgentResponse)
-async def review(body: ReviewRequest) -> AgentResponse:
-    prompt = build_review_prompt(body.previous_plan)
-    return await _run(body.silpo_access_token, prompt, apply=False)
 
 
 async def _run(access_token: str, prompt: str, *, apply: bool) -> AgentResponse:
@@ -111,3 +133,20 @@ async def _run(access_token: str, prompt: str, *, apply: bool) -> AgentResponse:
     except Exception as exc:
         raise HTTPException(502, f"agent failed: {exc}") from exc
     return AgentResponse(answer=result.answer, plan_to_persist=result.plan_to_persist)
+
+
+async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator[str, None]:
+    """Same run as `_run`, but yielded as SSE frames instead of collected into
+    one response. The HTTP status and headers are already sent by the time
+    an agent failure can happen, so failures become a terminal `error` event
+    instead of an HTTP error status."""
+    try:
+        async with SilpoMCP(settings.mcp_url, access_token) as mcp:
+            agent = SilpoFitAgent(settings, mcp)
+            await agent.prepare()
+            async for event in agent.run_stream(prompt, apply=apply):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    except SilpoTokenExpired as exc:
+        yield f"data: {json.dumps({'type': 'error', 'code': 'silpo_token_expired', 'message': str(exc)})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'type': 'error', 'message': f'agent failed: {exc}'})}\n\n"

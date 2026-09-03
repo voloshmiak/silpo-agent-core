@@ -52,7 +52,7 @@ _SCHEMA_DICT_FIELDS = ("properties", "$defs")
 
 
 def sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Drops JSON Schema keywords the Interactions API does not accept."""
+    """Drops JSON Schema keywords the Gemini API does not accept."""
     supported = set(types.JSONSchema.model_fields) | {
         "additionalProperties",
         "anyOf",

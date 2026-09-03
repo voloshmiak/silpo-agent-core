@@ -85,6 +85,12 @@
       "skillPath": "skills/caveman-stats/SKILL.md",
       "computedHash": "57c7db449641379e2afd1389fdb17cec8f33d9c8e25b1d28093937b4431895e8"
     },
+    "gemini-api": {
+      "source": "google/skills",
+      "sourceType": "github",
+      "skillPath": "skills/cloud/gemini-api/SKILL.md",
+      "computedHash": "cd379cd57639ff5dab90574e4a89e62182f55cf764592b1d37ec70e1585d6920"
+    },
     "gemini-interactions-api": {
       "source": "google-gemini/gemini-skills",
       "sourceType": "github",
