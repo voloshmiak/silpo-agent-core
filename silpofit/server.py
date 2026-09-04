@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, SilpoFitAgent
 from .config import Settings
 from .mcp_client import SilpoMCP, SilpoTokenExpired
-from .prompts import build_plan_prompt, build_review_prompt
+from .prompts import build_plan_prompt
 
 settings = Settings.load()
 app = FastAPI(
@@ -64,11 +64,6 @@ class PlanRequest(BaseModel):
     apply: bool = False
 
 
-class ReviewRequest(BaseModel):
-    silpo_access_token: str
-    previous_plan: dict[str, Any]
-
-
 class AgentResponse(BaseModel):
     answer: str
     plan_to_persist: dict[str, Any] | None
@@ -84,12 +79,6 @@ async def plan(body: PlanRequest) -> AgentResponse:
     return await _run(body.silpo_access_token, _plan_prompt(body), apply=body.apply)
 
 
-@app.post("/review", dependencies=[Depends(require_service_token)], response_model=AgentResponse)
-async def review(body: ReviewRequest) -> AgentResponse:
-    prompt = build_review_prompt(body.previous_plan)
-    return await _run(body.silpo_access_token, prompt, apply=False)
-
-
 @app.post("/plan/stream", dependencies=[Depends(require_service_token)])
 async def plan_stream(body: PlanRequest) -> StreamingResponse:
     """SSE: `tool_call`/`tool_result` events while the agent is calling MCP
@@ -99,12 +88,6 @@ async def plan_stream(body: PlanRequest) -> StreamingResponse:
         _sse(body.silpo_access_token, _plan_prompt(body), apply=body.apply),
         media_type="text/event-stream",
     )
-
-
-@app.post("/review/stream", dependencies=[Depends(require_service_token)])
-async def review_stream(body: ReviewRequest) -> StreamingResponse:
-    prompt = build_review_prompt(body.previous_plan)
-    return StreamingResponse(_sse(body.silpo_access_token, prompt, apply=False), media_type="text/event-stream")
 
 
 def _plan_prompt(body: PlanRequest) -> str:

@@ -65,21 +65,6 @@ DRY_RUN_NOTICE = """\
 Просто наведи фінальний перелік товарів у відповіді.
 """
 
-REVIEW_INSTRUCTION = """\
-Проаналізуй минулий тиждень і адаптуй план. Минулий план даний у повідомленні
-користувача нижче.
-
-1. silpo_get_my_online_orders і silpo_get_my_offline_orders — що реально куплено.
-2. silpo_get_my_shopping_cart — що лишилось у кошику некупленим.
-
-Порівняй план із фактом: які товари куплено, які проігноровано, чи вкладався
-користувач у бюджет, які категорії постійно випадають. Зроби висновки і скажи,
-що саме зміниш у наступному тижневому раціоні. Кошик зараз не змінюй.
-
-Виклич finalize_plan наостанок: cart_items лиши порожнім масивом, notes — з висновками
-й тим, що адаптувати наступного тижня.
-"""
-
 Sex = Literal["male", "female"]
 
 
@@ -117,11 +102,3 @@ def build_plan_prompt(
         lines.append(json.dumps(previous_plan, ensure_ascii=False))
     lines.append("Склади раціон на тиждень і збери кошик.")
     return "\n".join(lines)
-
-
-def build_review_prompt(previous_plan: dict[str, Any]) -> str:
-    return (
-        REVIEW_INSTRUCTION
-        + "\n\nМинулий тижневий план (JSON, від бекенда):\n"
-        + json.dumps(previous_plan, ensure_ascii=False)
-    )
