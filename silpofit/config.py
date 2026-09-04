@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 MCP_URL = "https://mcp.silpo.ua/mcp"
-MODEL = "gemini-3.6-flash"
+MODEL = "gemini-3.5-flash-lite"
 MAX_STEPS = 40
 
 @dataclass
