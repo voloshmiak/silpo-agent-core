@@ -7,7 +7,13 @@ from dotenv import load_dotenv
 
 MCP_URL = "https://mcp.silpo.ua/mcp"
 MODEL = "gemini-3.8-flash"
-MAX_STEPS = 40
+
+# A full pipeline — profile, cart context, searches, product details, the
+# nutrition/budget/day checks and their corrections — lands around 30 steps,
+# and a run that has to re-price a cart or redo a day needs the headroom on
+# top of that. This only bounds a run that is going nowhere; the real ceiling
+# on a healthy run is the Cloud Run request timeout (--timeout in deploy.yml).
+MAX_STEPS = 60
 
 @dataclass
 class Settings:

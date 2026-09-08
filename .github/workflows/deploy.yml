@@ -69,4 +69,5 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --quiet \
+            --timeout=3600 \
             --set-env-vars="^@^GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}@SILPOFIT_SERVICE_TOKENS=${{ secrets.SILPOFIT_SERVICE_TOKENS }}"
