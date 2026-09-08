@@ -39,6 +39,10 @@ USER app
 
 EXPOSE 8000
 
+# SILPOFIT_LOG_LEVEL raises or lowers log verbosity (default INFO). DEBUG adds
+# the full prompt, every tool result and the rejected finalize_plan payload —
+# useful for a failing run, too chatty to leave on.
+#
 # GEMINI_API_KEY and SILPOFIT_SERVICE_TOKENS are read from the environment at
 # startup (see silpofit/config.py) — pass them with `docker run -e` / --env-file,
 # never bake them into the image.

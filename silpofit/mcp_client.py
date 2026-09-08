@@ -10,12 +10,18 @@ for a single request's lifetime.
 """
 
 import json
+import logging
+import time
 from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import Client
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.types import CallToolResult, Tool
+
+from .logs import preview
+
+log = logging.getLogger(__name__)
 
 
 class SilpoTokenExpired(RuntimeError):
@@ -60,8 +66,16 @@ class SilpoMCP:
             headers={"Accept": "application/json, text/event-stream"},
         )
         if response.status_code == 401:
+            log.warning("Silpo rejected the access token (401) at %s", self._mcp_url)
             raise SilpoTokenExpired("Silpo rejected the supplied access token (401)")
+        if response.status_code >= 400:
+            log.error(
+                "Silpo MCP initialize failed: HTTP %d — %s",
+                response.status_code,
+                preview(response.text, 400),
+            )
         response.raise_for_status()
+        log.info("Silpo MCP session opened at %s", self._mcp_url)
 
     async def __aexit__(self, *exc_info) -> None:
         await self._stack.aclose()
@@ -74,12 +88,25 @@ class SilpoMCP:
         return self._client
 
     async def list_tools(self) -> list[Tool]:
-        return (await self.client.list_tools()).tools
+        tools = (await self.client.list_tools()).tools
+        log.info("Silpo MCP exposes %d tools", len(tools))
+        return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Calls an MCP tool and flattens the result into text for the model."""
-        result = await self.client.call_tool(name, arguments)
-        return _flatten(result)
+        started = time.monotonic()
+        try:
+            result = await self.client.call_tool(name, arguments)
+        except Exception:
+            # The agent turns this into a tool error for the model; without a
+            # log line here the transport failure itself would be invisible.
+            log.exception("MCP %s raised after %.0fms", name, (time.monotonic() - started) * 1000)
+            raise
+        text = _flatten(result)
+        if result.is_error:
+            log.warning("MCP %s returned an error result: %s", name, preview(text, 600))
+        log.debug("MCP %s: %.0fms, %d chars", name, (time.monotonic() - started) * 1000, len(text))
+        return text
 
 
 def _flatten(result: CallToolResult) -> str:
