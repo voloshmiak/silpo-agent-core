@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, SilpoFitAgent
 from .config import Settings
 from .mcp_client import SilpoMCP, SilpoTokenExpired
+from .plan_schema import Plan
 from .prompts import build_plan_prompt
 
 settings = Settings.load()
@@ -64,26 +65,23 @@ class PlanRequest(BaseModel):
     apply: bool = False
 
 
-class AgentResponse(BaseModel):
-    answer: str
-    plan_to_persist: dict[str, Any] | None
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/plan", dependencies=[Depends(require_service_token)], response_model=AgentResponse)
-async def plan(body: PlanRequest) -> AgentResponse:
+@app.post("/plan", dependencies=[Depends(require_service_token)], response_model=Plan)
+async def plan(body: PlanRequest) -> Plan:
+    """The finished weekly plan: targets, seven days of meals, cart, summary."""
     return await _run(body.silpo_access_token, _plan_prompt(body), apply=body.apply)
 
 
 @app.post("/plan/stream", dependencies=[Depends(require_service_token)])
 async def plan_stream(body: PlanRequest) -> StreamingResponse:
     """SSE: `tool_call`/`tool_result` events while the agent is calling MCP
-    tools, `token` events while it writes the final answer, then one `plan`
-    event with the finalized plan (or `error` if the run fails)."""
+    tools, then one terminal `plan` event carrying the same JSON object that
+    `POST /plan` returns (or `error` if the run fails). No prose is streamed —
+    the plan is the answer."""
     return StreamingResponse(
         _sse(body.silpo_access_token, _plan_prompt(body), apply=body.apply),
         media_type="text/event-stream",
@@ -105,7 +103,7 @@ def _plan_prompt(body: PlanRequest) -> str:
     )
 
 
-async def _run(access_token: str, prompt: str, *, apply: bool) -> AgentResponse:
+async def _run(access_token: str, prompt: str, *, apply: bool) -> Plan:
     try:
         async with SilpoMCP(settings.mcp_url, access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
@@ -115,7 +113,7 @@ async def _run(access_token: str, prompt: str, *, apply: bool) -> AgentResponse:
         raise HTTPException(409, {"code": "silpo_token_expired", "message": str(exc)}) from exc
     except Exception as exc:
         raise HTTPException(502, f"agent failed: {exc}") from exc
-    return AgentResponse(answer=result.answer, plan_to_persist=result.plan_to_persist)
+    return Plan.model_validate(result.plan)
 
 
 async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator[str, None]:

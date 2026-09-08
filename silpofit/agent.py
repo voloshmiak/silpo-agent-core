@@ -4,13 +4,13 @@ The agent holds no state across runs. Everything it needs — profile, goal,
 budget, previous plan — arrives folded into the prompt text; everything it
 produces comes back in the return value for the caller to persist.
 
-`run_stream` is the source of truth for the loop; `run` just drains it. Two
-phases fall out of the same loop, not two separate code paths: while the
-model is emitting tool calls, each step yields `tool_call`/`tool_result`
-events (nothing to token-stream there — the model isn't writing text). Once
-a turn comes back with no tool calls, that's the synthesis turn, and its
-text streams out token by token, ending in one `plan` event with the
-finalized plan and the full answer.
+`run_stream` is the source of truth for the loop; `run` just drains it. Each
+step yields `tool_call`/`tool_result` events while the model works through
+the pipeline, and the run ends the moment finalize_plan lands: that call
+carries the whole structured plan, so there is nothing left to say in prose
+and no reason to spend another model turn saying it. A turn that comes back
+without tool calls means the model stopped short of finalize_plan — that is
+a failed run, not an answer.
 """
 
 import asyncio
@@ -28,7 +28,7 @@ from .tool_bridge import MUTATING_TOOLS, select_tools
 
 DRY_RUN_REFUSAL = (
     "Cart writes are disabled in review mode. The cart was NOT changed. "
-    "Do not retry this tool; list the intended products in your final answer instead."
+    "Do not retry this tool; put the intended products in the plan's cart instead."
 )
 
 MAX_RATE_LIMIT_RETRIES = 5
@@ -36,8 +36,7 @@ MAX_RATE_LIMIT_RETRIES = 5
 
 @dataclass
 class AgentResult:
-    answer: str
-    plan_to_persist: dict[str, Any] | None
+    plan: dict[str, Any]
 
 
 class SilpoFitAgent:
@@ -76,20 +75,19 @@ class SilpoFitAgent:
         print(f"[info] {len(all_declarations)} tools available ({len(declarations)} from Silpo MCP)")
 
     async def run(self, user_input: str, *, apply: bool = False) -> AgentResult:
-        """Drains run_stream and returns just the final answer + plan."""
-        answer = "(no answer)"
+        """Drains run_stream and returns just the finished plan."""
         async for event in self.run_stream(user_input, apply=apply):
             if event["type"] == "plan":
-                answer = event["answer"]
-            elif event["type"] == "error":
+                return AgentResult(plan=event["plan"])
+            if event["type"] == "error":
                 raise RuntimeError(event["message"])
-        return AgentResult(answer=answer, plan_to_persist=self._captured_plan)
+        raise RuntimeError("agent produced no plan")
 
     async def run_stream(self, user_input: str, *, apply: bool = False) -> AsyncGenerator[dict[str, Any], None]:
         """Runs the agent loop, yielding one progress event per step.
 
-        Event types: `tool_call`, `tool_result` (orchestration phase),
-        `token` (synthesis phase), `plan` (terminal, success), `error`
+        Event types: `tool_call`, `tool_result` (progress), `plan`
+        (terminal, success — carries the structured plan), `error`
         (terminal, failure).
         """
         self._apply = apply
@@ -102,19 +100,16 @@ class SilpoFitAgent:
         history: list[types.Content] = [types.Content(role="user", parts=[types.Part(text=user_input)])]
 
         for step_number in range(self._settings.max_steps):
-            parts: list[types.Part] = []
-            text = ""
-            async for kind, payload in self._generate_streaming(history, system_instruction):
-                if kind == "token":
-                    yield _event("token", text=payload)
-                else:
-                    parts, text = payload
-
+            parts = await self._generate(history, system_instruction)
             history.append(types.Content(role="model", parts=parts or [types.Part(text="")]))
 
             calls = [part.function_call for part in parts if part.function_call]
             if not calls:
-                yield _event("plan", answer=text or "(no answer)", plan=self._captured_plan)
+                yield _event(
+                    "error",
+                    message=f"agent stopped without calling {finalize.TOOL_NAME}",
+                    text=_truncate(_text_of(parts), 500),
+                )
                 return
 
             response_parts = []
@@ -134,29 +129,27 @@ class SilpoFitAgent:
                         response={"error": result_text} if is_error else {"result": result_text},
                     )
                 )
+
+            if self._captured_plan is not None:
+                yield _event("plan", plan=self._captured_plan)
+                return
+
             history.append(types.Content(role="user", parts=response_parts))
 
         yield _event("error", message=f"agent exceeded {self._settings.max_steps} tool steps")
 
-    async def _generate_streaming(
-        self, history: list[types.Content], system_instruction: str
-    ) -> AsyncGenerator[tuple[str, Any], None]:
-        """Streams one model turn.
+    async def _generate(self, history: list[types.Content], system_instruction: str) -> list[types.Part]:
+        """Runs one model turn, retrying while the API rate-limits us.
 
-        Yields `("token", text)` for every text chunk as it arrives, then a
-        final `("done", (parts, full_text))` once the turn is complete.
-        `parts` are the raw `Part` objects as the API sent them (not rebuilt
-        from `FunctionCall`/text alone) — Gemini 3 attaches a
-        `thought_signature` to function-call parts that must round-trip back
-        unchanged on the next turn, or the API rejects the request. Function
-        args on the tools this agent uses are small, so calls are treated as
-        complete wherever they appear in the stream rather than reassembled
-        from partial-arg deltas.
+        Returns the raw `Part` objects as the API sent them (not rebuilt from
+        `FunctionCall`/text alone) — Gemini 3 attaches a `thought_signature`
+        to function-call parts that must round-trip back unchanged on the next
+        turn, or the API rejects the request.
         """
-        stream = None
+        response = None
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
             try:
-                stream = await self._genai.aio.models.generate_content_stream(
+                response = await self._genai.aio.models.generate_content(
                     model=self._settings.model,
                     contents=history,
                     config=types.GenerateContentConfig(
@@ -171,18 +164,10 @@ class SilpoFitAgent:
                 delay = _retry_after_seconds(exc) or 2**attempt
                 print(f"      ! rate limited, retrying in {delay:.1f}s ({attempt + 1}/{MAX_RATE_LIMIT_RETRIES})")
                 await asyncio.sleep(delay)
-        assert stream is not None
+        assert response is not None
 
-        parts: list[types.Part] = []
-        text_chunks: list[str] = []
-        async for chunk in stream:
-            content = chunk.candidates[0].content if chunk.candidates else None
-            for part in (content.parts if content else None) or []:
-                parts.append(part)
-                if part.text and not part.thought:
-                    text_chunks.append(part.text)
-                    yield "token", part.text
-        yield "done", (parts, "".join(text_chunks))
+        content = response.candidates[0].content if response.candidates else None
+        return list((content.parts if content else None) or [])
 
     async def _dispatch(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
         """Runs one tool call. Tool failures come back as text, never as exceptions."""
@@ -200,8 +185,17 @@ class SilpoFitAgent:
             return f"{type(exc).__name__}: {exc}", True
 
     def _finalize(self, **arguments: Any) -> str:
-        self._captured_plan = arguments
-        return finalize.ack(arguments)
+        """Validates the plan before capturing it.
+
+        A rejection travels back to the model as a tool error, so a malformed
+        call costs one retry instead of failing the whole run.
+        """
+        self._captured_plan = finalize.validate(arguments)
+        return "recorded"
+
+
+def _text_of(parts: list[types.Part]) -> str:
+    return "".join(part.text for part in parts if part.text and not part.thought)
 
 
 def _event(type_: str, **data: Any) -> dict[str, Any]:

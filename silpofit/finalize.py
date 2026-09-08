@@ -1,12 +1,23 @@
 """The agent's only 'memory' tool: capturing the finished plan for the caller.
 
 The agent is stateless — it does not persist anything itself. Its last tool
-call in every run must be finalize_plan; the agent loop intercepts that call
-and hands the structured payload back to the caller (an HTTP backend) as
-`plan_to_persist`, instead of writing it anywhere locally.
+call in every run must be finalize_plan; the agent loop intercepts that call,
+validates the payload against `plan_schema.Plan` and hands it back to the
+caller (an HTTP backend) as the run's result, instead of writing it anywhere
+locally. The whole answer lives in this call's arguments — there is no final
+text turn after it.
+
+The tool's parameter schema is generated from the Pydantic model rather than
+written out by hand, so what the model is asked for and what the API returns
+can never drift apart.
 """
 
 from typing import Any
+
+from pydantic import ValidationError
+
+from .plan_schema import Plan
+from .tool_bridge import sanitize_schema
 
 TOOL_NAME = "finalize_plan"
 
@@ -14,51 +25,21 @@ DECLARATION = {
     "type": "function",
     "name": TOOL_NAME,
     "description": (
-        "Records the finished ration and cart. This must be the LAST tool call of the "
-        "run — call it once, after the cart (or, for a review, the analysis) is settled, "
-        "then give your final text answer with no further tool calls."
+        "Records the finished weekly plan: daily calorie and macro targets, the estimated "
+        "time to reach the goal, all 7 days of the ration with breakfast/lunch/snack/dinner, "
+        "the final cart and the summary. This must be the LAST tool call of the run — the "
+        "run ends here, so everything the user should see must be inside these arguments. "
+        "Ukrainian for every human-readable text."
     ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "ration_summary": {
-                "type": "string",
-                "description": "Short description of the week's ration, day by day",
-            },
-            "cart_items": {
-                "type": "array",
-                "description": "Final cart, or [] for a review run: product name, id, quantity, price",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "product_id": {"type": "string"},
-                        "quantity": {"type": "number"},
-                        "price": {"type": "number"},
-                    },
-                    "required": ["name"],
-                },
-            },
-            "budget_uah": {"type": "number"},
-            "targets": {
-                "type": "object",
-                "description": "Calorie and macro targets used for this plan",
-                "properties": {
-                    "daily_kcal": {"type": "integer"},
-                    "daily_protein_g": {"type": "integer"},
-                    "daily_fat_g": {"type": "integer"},
-                    "daily_carbs_g": {"type": "integer"},
-                },
-            },
-            "notes": {
-                "type": "string",
-                "description": "What was adapted compared with the previous plan and why",
-            },
-        },
-        "required": ["ration_summary", "cart_items"],
-    },
+    "parameters": sanitize_schema(Plan.model_json_schema()),
 }
 
 
-def ack(_: dict[str, Any]) -> str:
-    return "recorded"
+def validate(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Returns the normalized plan, or raises with a message the model can act on."""
+    try:
+        return Plan.model_validate(arguments).model_dump()
+    except ValidationError as exc:
+        raise ValueError(
+            f"{TOOL_NAME} rejected — fix these fields and call it again: {exc}"
+        ) from exc
