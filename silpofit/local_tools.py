@@ -106,8 +106,9 @@ def _verdict(covered: float) -> str:
 def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, Any]:
     """Totals the cart and points at what to cut when it overruns.
 
-    `line_items` comes back priced per position so the plan's cart can carry
-    the same numbers this tool computed, instead of the model re-deriving them.
+    `line_items` comes back priced per position, and carries the product's
+    slug and image straight through, so the plan's cart can be a copy of what
+    this tool returned rather than something the model reassembles by hand.
     """
     priced = []
     for item in items:
@@ -116,6 +117,8 @@ def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, An
         priced.append(
             {
                 "name": item.get("name", "?"),
+                "slug": item.get("slug", ""),
+                "image_url": item.get("image_url", ""),
                 "price": round(price, 2),
                 "quantity": quantity,
                 "total_price": round(price * quantity, 2),
@@ -257,7 +260,7 @@ DECLARATIONS = [
         "name": "check_budget",
         "description": (
             "Totals the planned cart cost, flags budget overrun and returns the per-position "
-            "prices to put into the plan's cart."
+            "prices, slugs and images to copy into the plan's cart."
         ),
         "parameters": {
             "type": "object",
@@ -268,6 +271,8 @@ DECLARATIONS = [
                         "type": "object",
                         "properties": {
                             "name": {"type": "string"},
+                            "slug": {"type": "string", "description": "Product slug from MCP"},
+                            "image_url": {"type": "string", "description": "Product image URL from MCP"},
                             "price": {"type": "number", "description": "Price per unit in UAH"},
                             "quantity": {"type": "number"},
                         },

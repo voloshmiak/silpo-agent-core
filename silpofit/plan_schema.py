@@ -18,6 +18,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 Day = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
+# What silpo_get_product_details returns as `url` for a product, given its slug.
+# Building the link here rather than letting the model write it means a cart
+# link is always a real product page or nothing at all.
+PRODUCT_URL = "https://silpo.ua/product/{slug}"
+
 DAYS: tuple[str, ...] = (
     "monday",
     "tuesday",
@@ -79,10 +84,26 @@ class DayPlan(Macros):
 class CartItem(_Model):
     name: str = Field(description="Назва товару як у «Сільпо»")
     product_id: str = Field("", description="ID товару з MCP")
+    slug: str = Field("", description="Slug товару з MCP — з нього будується посилання")
+    url: str = Field("", description="Посилання на сторінку товару (будується зі slug)")
+    image_url: str = Field(
+        "", description="Пряме посилання на зображення з MCP: поле image або images[0]"
+    )
     quantity: float = Field(1, description="Кількість одиниць")
     unit: str = Field("", description="Одиниця, напр. «шт», «кг»")
     price: float = Field(description="Ціна за одиницю, грн")
     total_price: float = Field(description="price × quantity, грн")
+
+    @model_validator(mode="after")
+    def _link_from_slug(self) -> "CartItem":
+        """Derives the product link and drops an image link that isn't one."""
+        if self.slug:
+            self.url = PRODUCT_URL.format(slug=self.slug)
+        if not self.url.startswith("https://"):
+            self.url = ""
+        if not self.image_url.startswith("https://"):
+            self.image_url = ""
+        return self
 
 
 class Summary(_Model):
