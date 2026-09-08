@@ -12,6 +12,7 @@ not this schema's. And no field is nullable: Gemini handles `anyOf` with
 nulls the model sends anyway are dropped on the way in.
 """
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -22,6 +23,13 @@ Day = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"
 # Building the link here rather than letting the model write it means a cart
 # link is always a real product page or nothing at all.
 PRODUCT_URL = "https://silpo.ua/product/{slug}"
+
+# Silpo ends every slug with the product's article number ("banan-32485") and
+# serves every product image from one host. A cart entry that matches neither
+# was invented by the model rather than read off a search result, and a link
+# built from it would 404 — so the shapes are enforced, not trusted.
+PRODUCT_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-\d+$")
+IMAGE_HOST = "https://images.silpo.ua/"
 
 DAYS: tuple[str, ...] = (
     "monday",
@@ -96,13 +104,21 @@ class CartItem(_Model):
 
     @model_validator(mode="after")
     def _link_from_slug(self) -> "CartItem":
-        """Derives the product link and drops an image link that isn't one."""
-        if self.slug:
-            self.url = PRODUCT_URL.format(slug=self.slug)
-        if not self.url.startswith("https://"):
-            self.url = ""
-        if not self.image_url.startswith("https://"):
-            self.image_url = ""
+        """Rejects an invented product, then derives its link from the slug."""
+        if not PRODUCT_SLUG.match(self.slug):
+            raise ValueError(
+                f"«{self.name}»: slug {self.slug!r} не з «Сільпо». Справжній slug "
+                "закінчується артикулом товару (напр. «banan-32485») і береться "
+                "дослівно з silpo_find_products_batch чи silpo_get_product_details. "
+                "Знайди реальний товар і візьми slug звідти — не складай його сам."
+            )
+        if not self.image_url.startswith(IMAGE_HOST):
+            raise ValueError(
+                f"«{self.name}»: image_url {self.image_url!r} не з «Сільпо». Візьми "
+                f"поле image з пошуку або images[0] з деталей товару — воно завжди "
+                f"починається з {IMAGE_HOST}."
+            )
+        self.url = PRODUCT_URL.format(slug=self.slug)
         return self
 
 

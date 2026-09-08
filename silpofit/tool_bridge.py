@@ -25,8 +25,13 @@ ALLOWED_TOOLS = (
     "silpo_get_promotions",
     "silpo_get_my_promos",
     "silpo_get_my_coupons",
-    # the cart itself
+    # cart context: branchId, deliveryType and timeslot, without which every
+    # product search silently returns zero results
     "silpo_get_my_shopping_cart",
+    "silpo_get_shopping_cart_by_id",
+    "silpo_get_available_delivery_types",
+    "silpo_get_time_slots",
+    # the cart itself
     "silpo_add_or_update_cart_products",
     "silpo_remove_cart_products",
     "silpo_clear_shopping_cart",
