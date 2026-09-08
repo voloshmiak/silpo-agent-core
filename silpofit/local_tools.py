@@ -135,11 +135,17 @@ def _coverage_hint(covered: float, days: int) -> str:
 
 
 def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, Any]:
-    """Totals the cart and points at what to cut when it overruns.
+    """Totals the planned cart and points at what to cut when it overruns.
 
-    `line_items` comes back priced per position, and carries the product's
-    slug and image straight through, so the plan's cart can be a copy of what
-    this tool returned rather than something the model reassembles by hand.
+    `line_items` comes back priced per position, and carries the product's slug
+    and image straight through, so the model can keep working from one list
+    rather than reassembling it by hand while it swaps products around.
+
+    This is an estimate, not the bill. It is fed shelf prices from product
+    search, and Silpo applies the user's personal and promo discounts only when
+    it calculates the cart — so the real total lands several percent lower. The
+    prices that reach the plan are read back off the filled cart; these ones
+    exist to keep the model inside the budget while it is still choosing.
     """
     priced = []
     for item in items:
@@ -333,8 +339,10 @@ DECLARATIONS = [
         "type": "function",
         "name": "check_budget",
         "description": (
-            "Totals the planned cart cost, flags budget overrun and returns the per-position "
-            "prices, slugs and images to copy into the plan's cart."
+            "Estimates the planned cart cost from search prices, flags budget overrun and "
+            "returns per-position totals, slugs and images. An upper bound only: the user's "
+            "personal and promo discounts are applied by Silpo when it calculates the cart, "
+            "so the plan's final prices must be read back from silpo_get_shopping_cart_by_id."
         ),
         "parameters": {
             "type": "object",

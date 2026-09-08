@@ -5,11 +5,18 @@ it calls `finalize_plan`, the validation that rejects a malformed call before
 it can reach the caller, and the response model of `POST /plan`. Keeping it in
 one place is what lets the agent's output and the HTTP contract stay in step.
 
-Two conventions matter here. Days are keyed by stable English identifiers
+Three conventions matter here. Days are keyed by stable English identifiers
 (`monday`…`sunday`); how a day is named to the reader is the frontend's call,
 not this schema's. And no field is nullable: Gemini handles `anyOf` with
 `type: "null"` poorly, so anything optional gets an empty default instead, and
 nulls the model sends anyway are dropped on the way in.
+
+Money is the third. Every price here is what the user actually pays, which is
+not what product search returns: search prices are shelf prices, and the
+personal and loyalty discounts only materialize in the cart's own calculation.
+So `CartItem` prices and `Summary` totals are copied out of
+silpo_get_shopping_cart_by_id after the cart is filled — never computed from
+search results.
 """
 
 import re
@@ -99,8 +106,38 @@ class CartItem(_Model):
     )
     quantity: float = Field(1, description="Кількість одиниць")
     unit: str = Field("", description="Одиниця, напр. «шт», «кг»")
-    price: float = Field(description="Ціна за одиницю, грн")
-    total_price: float = Field(description="price × quantity, грн")
+    price: float = Field(
+        description="Ціна за одиницю ПІСЛЯ знижок, грн — поле price позиції кошика"
+    )
+    old_price: float = Field(
+        0.0, description="Ціна за одиницю до знижок, грн — поле oldPrice позиції кошика, або 0"
+    )
+    total_price: float = Field(
+        description="Сума позиції після знижок, грн — поле total позиції кошика"
+    )
+    discount_uah: float = Field(
+        0.0, description="Знижка на позицію, грн — поле subDiscount позиції кошика"
+    )
+
+    @model_validator(mode="after")
+    def _line_total_matches(self) -> "CartItem":
+        """Catches a unit price passed where the line total belongs, and vice versa.
+
+        The tolerance is loose on purpose: `price` comes back from Silpo already
+        rounded, so `price × quantity` and the cart's own `total` can disagree by
+        a kopiyka on a weighted position. What it does catch is an order-of-
+        magnitude mix-up — 2 шт priced as one, or a per-kg price used as a line.
+        """
+        expected = round(self.price * self.quantity, 2)
+        if abs(expected - self.total_price) > max(0.05, expected * 0.02):
+            raise ValueError(
+                f"«{self.name}»: total_price {self.total_price} не збігається з "
+                f"price × quantity ({self.price} × {self.quantity} = {expected}). "
+                "price — це ціна за одиницю (поле price позиції кошика), "
+                "total_price — сума всієї позиції (поле total). Для вагового товару "
+                "price за кілограм, а quantity в кілограмах."
+            )
+        return self
 
     @model_validator(mode="after")
     def _link_from_slug(self) -> "CartItem":
@@ -123,7 +160,21 @@ class CartItem(_Model):
 
 
 class Summary(_Model):
-    total_uah: float = Field(description="Кінцева сума кошика на тиждень, грн")
+    total_uah: float = Field(
+        description=(
+            "Сума до сплати, грн — calculation.totalAfterDiscounts кошика "
+            "(товари зі знижками + доставка)"
+        )
+    )
+    products_total_uah: float = Field(
+        0.0, description="Сума товарів після знижок, грн — calculation.productsTotal"
+    )
+    delivery_uah: float = Field(
+        0.0, description="Вартість доставки, грн — calculation.delivery.total"
+    )
+    discount_uah: float = Field(
+        0.0, description="Загальна економія на знижках, грн — calculation.subDiscount"
+    )
     budget_uah: float = Field(description="Бюджет із запиту, грн")
     remaining_uah: float = Field(description="Залишок бюджету, грн")
     restrictions: list[str] = Field(
