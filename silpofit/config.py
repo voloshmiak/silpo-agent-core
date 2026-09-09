@@ -6,16 +6,16 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 MCP_URL = "https://mcp.silpo.ua/mcp"
-MODEL = "gemini-3.8-flash"
+MODEL = "gemini-3.5-flash-lite"
 
-# Gemini 3 flash models think by default (MEDIUM), and this agent spends 30-60
+# Flash-Lite thinks minimally by default, and this agent spends 30-60
 # model turns per run — so the thinking tax is paid on every one of them. The
 # reasoning that matters here (which product, which day, does the budget hold)
 # is carried by the prompt and the local check tools, not by long deliberation
 # inside a single turn, so the lowest rung keeps the planning quality and drops
 # the wait. The ladder is MINIMAL < LOW < MEDIUM < HIGH; raise it via
 # SILPOFIT_THINKING_LEVEL if plans degrade.
-THINKING_LEVEL = "MINIMAL"
+THINKING_LEVEL = "MEDIUM"
 
 # A full pipeline — profile, cart context, searches, product details, the
 # nutrition/budget/day checks and their corrections — lands around 30 steps,
