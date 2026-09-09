@@ -253,6 +253,9 @@ class SilpoFitAgent:
                     config=types.GenerateContentConfig(
                         system_instruction=system_instruction,
                         tools=self._tools,
+                        thinking_config=types.ThinkingConfig(
+                            thinking_level=self._settings.thinking_level
+                        ),
                     ),
                 )
                 break

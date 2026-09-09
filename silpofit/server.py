@@ -72,8 +72,9 @@ class PlanRequest(BaseModel):
 
 
 log.info(
-    "SilpoFit starting: model=%s max_steps=%d mcp=%s service_tokens=%d",
+    "SilpoFit starting: model=%s thinking=%s max_steps=%d mcp=%s service_tokens=%d",
     settings.model,
+    settings.thinking_level,
     settings.max_steps,
     settings.mcp_url,
     len(settings.service_tokens),
