@@ -1,14 +1,3 @@
-"""System instruction and prompt builders for the SilpoFit pipeline.
-
-The agent is stateless: profile, goal, budget and any previous plan arrive as
-plain data in the request and get folded into the prompt text below. The
-agent never fetches or stores that context itself.
-
-The run's whole output is the `finalize_plan` call — there is no final prose
-turn — so the instruction below is written to get every field of that call
-filled in, not to shape a text answer.
-"""
-
 import json
 from typing import Any
 
@@ -148,8 +137,6 @@ DIET_LABELS: dict[str, str] = {
     "low_fodmap": "low FODMAP",
 }
 
-# What each diet actually forbids. The enum value alone leaves too much room:
-# spelled out, a violating product is a rule broken rather than a judgement call.
 DIET_RULES: dict[str, str] = {
     "vegetarian": "жодного мʼяса, риби та морепродуктів; яйця й молочне можна",
     "vegan": "жодних продуктів тваринного походження: мʼясо, риба, яйця, молочне, мед",
@@ -210,13 +197,6 @@ def build_plan_prompt(
     note: str = "",
     previous_plan: dict[str, Any] | None = None,
 ) -> str:
-    """Folds one request into the user message the run starts from.
-
-    Everything the caller sends becomes a line here — the agent has no other
-    way to learn it. A field the user set and this function skips is a field
-    that changes nothing about the plan, so each one either appears or is
-    genuinely empty.
-    """
     goal = goal or _goal_from_weights(weight_kg, target_weight_kg)
     lines = [
         f"Поточна вага: {weight_kg} кг. Цільова вага: {target_weight_kg} кг. Ціль: {goal}.",
@@ -291,7 +271,6 @@ def build_plan_prompt(
 
 
 def _goal_from_weights(weight_kg: float, target_weight_kg: float) -> Goal:
-    """The fallback for a caller that has not started sending `goal` yet."""
     if target_weight_kg < weight_kg:
         return "lose"
     if target_weight_kg > weight_kg:

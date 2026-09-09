@@ -1,22 +1,3 @@
-"""The shape of a plan request.
-
-Everything the agent knows about a user arrives in one POST body: the caller
-(a backend) owns authorization, the profile and the history, and the agent
-holds nothing between runs. This module is the input half of that contract,
-the way `plan_schema` is the output half.
-
-Two things happen here that a plain model would not do.
-
-Enum-like values are normalized before validation. They are collected in a
-Ukrainian-language onboarding and reach us as human labels («КЕТО»,
-«Схуднення», «ПН») at least as often as as identifiers, and a constraint that
-misses because of its casing is a constraint the user set and the plan ignored.
-
-And a value that matches nothing is rejected loudly instead of quietly falling
-back to a default. A 422 the caller sees while wiring the field up is far
-cheaper than an allergen that travelled all the way here and then did nothing.
-"""
-
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -26,9 +7,6 @@ Goal = Literal["lose", "maintain", "gain"]
 DietType = Literal["none", "vegetarian", "vegan", "keto", "paleo", "low_fodmap"]
 PromoPriority = Literal["low", "medium", "high"]
 
-# Ukrainian labels the onboarding collects, mapped onto the identifiers above.
-# Matching is done on a casefolded, whitespace-collapsed string, so only one
-# spelling of each label needs to be listed.
 SEX_ALIASES: dict[str, str] = {
     "male": "male",
     "m": "male",
@@ -107,9 +85,6 @@ PROMO_ALIASES: dict[str, str] = {
     "тільки акції": "high",
 }
 
-# Workout-schedule keys: the plan speaks `monday`…`sunday` (see `plan_schema`),
-# the onboarding speaks «ПН». Both, plus the usual English abbreviations, have
-# to land on the same day.
 DAY_ALIASES: dict[str, str] = {
     alias: day
     for day, aliases in {
@@ -124,22 +99,14 @@ DAY_ALIASES: dict[str, str] = {
     for alias in aliases
 }
 
-# A pace nobody sets on purpose: past this the request is a unit mistake
-# (grams per week, kilograms per month) rather than an aggressive plan.
 MAX_WEEKLY_PACE_KG = 2.0
 
 
 def _key(value: str) -> str:
-    """The form aliases are matched on: casefolded, whitespace collapsed."""
     return " ".join(value.split()).casefold()
 
 
 def _normalize(value: Any, aliases: dict[str, str], field: str) -> Any:
-    """Maps one incoming label onto its identifier, or says what was allowed.
-
-    Anything that is not a string is handed to pydantic untouched, so a type
-    error still reads as a type error.
-    """
     if not isinstance(value, str):
         return value
     key = _key(value)
@@ -225,7 +192,6 @@ class PlanRequest(BaseModel):
     @field_validator("weekly_pace_kg", mode="before")
     @classmethod
     def _pace_magnitude(cls, value: Any) -> Any:
-        """A losing pace reads naturally as -0.6; the direction is `goal`'s job."""
         if isinstance(value, (int, float)):
             pace = abs(float(value))
             if pace > MAX_WEEKLY_PACE_KG:
@@ -263,7 +229,6 @@ class PlanRequest(BaseModel):
 
     @model_validator(mode="after")
     def _workouts_from_schedule(self) -> "PlanRequest":
-        """A schedule is a count too — use it when no count was sent."""
         if self.workout_schedule and not self.workouts_per_week:
             self.workouts_per_week = len(self.workout_schedule)
         return self

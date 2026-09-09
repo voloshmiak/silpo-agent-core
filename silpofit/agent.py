@@ -1,18 +1,3 @@
-"""The SilpoFit agent loop: Gemini decides, MCP and local tools act.
-
-The agent holds no state across runs. Everything it needs — profile, goal,
-budget, previous plan — arrives folded into the prompt text; everything it
-produces comes back in the return value for the caller to persist.
-
-`run_stream` is the source of truth for the loop; `run` just drains it. Each
-step yields `tool_call`/`tool_result` events while the model works through
-the pipeline, and the run ends the moment finalize_plan lands: that call
-carries the whole structured plan, so there is nothing left to say in prose
-and no reason to spend another model turn saying it. A turn that comes back
-without tool calls means the model stopped short of finalize_plan — that is
-a failed run, not an answer.
-"""
-
 import asyncio
 import json
 import logging
@@ -46,15 +31,6 @@ class AgentResult:
 
 @dataclass
 class _ModelTurn:
-    """One model turn plus the metadata that explains an empty one.
-
-    A run that ends without finalize_plan almost always ends because the model
-    turn came back with no function calls, and `finish_reason` is what says
-    why (MAX_TOKENS, SAFETY, a plain text answer…). Keeping it next to the
-    parts means the failure event can carry the reason instead of just the
-    symptom.
-    """
-
     parts: list[types.Part] = field(default_factory=list)
     finish_reason: str = "UNKNOWN"
     usage: dict[str, int] = field(default_factory=dict)
@@ -72,7 +48,6 @@ class SilpoFitAgent:
         self._captured_plan: dict[str, Any] | None = None
 
     async def prepare(self) -> None:
-        """Loads the MCP tool list and builds the full tool set for the model."""
         mcp_tools = await self._mcp.list_tools()
         declarations, missing = select_tools(mcp_tools)
         if missing:
@@ -101,7 +76,6 @@ class SilpoFitAgent:
         )
 
     async def run(self, user_input: str, *, apply: bool = False) -> AgentResult:
-        """Drains run_stream and returns just the finished plan."""
         async for event in self.run_stream(user_input, apply=apply):
             if event["type"] == "plan":
                 return AgentResult(plan=event["plan"])
@@ -111,12 +85,6 @@ class SilpoFitAgent:
         raise RuntimeError("agent produced no plan")
 
     async def run_stream(self, user_input: str, *, apply: bool = False) -> AsyncGenerator[dict[str, Any], None]:
-        """Runs the agent loop, yielding one progress event per step.
-
-        Event types: `tool_call`, `tool_result` (progress), `plan`
-        (terminal, success — carries the structured plan), `error`
-        (terminal, failure).
-        """
         self._apply = apply
         self._captured_plan = None
 
@@ -144,9 +112,6 @@ class SilpoFitAgent:
 
             calls = [part.function_call for part in turn.parts if part.function_call]
             if not calls:
-                # The single most common way a run dies. The model's own words
-                # and the finish reason are the whole diagnosis, so log them in
-                # full and hand a trimmed copy to the caller.
                 text = _text_of(turn.parts)
                 log.error(
                     "run failed at step %d/%d: no tool calls, finish_reason=%s, parts=%d, "
@@ -236,13 +201,6 @@ class SilpoFitAgent:
     async def _generate(
         self, history: list[types.Content], system_instruction: str, step_number: int
     ) -> _ModelTurn:
-        """Runs one model turn, retrying while the API rate-limits us.
-
-        Returns the raw `Part` objects as the API sent them (not rebuilt from
-        `FunctionCall`/text alone) — Gemini 3 attaches a `thought_signature`
-        to function-call parts that must round-trip back unchanged on the next
-        turn, or the API rejects the request.
-        """
         response = None
         started = time.monotonic()
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
@@ -298,8 +256,6 @@ class SilpoFitAgent:
             len(turn.parts),
             preview(turn.usage, 120) if turn.usage else "?",
         )
-        # Two silent killers: a blocked prompt and a truncated turn both come
-        # back as an ordinary response with nothing useful inside it.
         feedback = getattr(response, "prompt_feedback", None)
         if feedback is not None and getattr(feedback, "block_reason", None):
             log.error("step %d prompt blocked by the API: %s", step_number, feedback.block_reason)
@@ -308,7 +264,6 @@ class SilpoFitAgent:
         return turn
 
     async def _dispatch(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
-        """Runs one tool call. Tool failures come back as text, never as exceptions."""
         if name in MUTATING_TOOLS and not self._apply:
             log.info("tool %s refused: cart writes are off (apply=False)", name)
             return DRY_RUN_REFUSAL, True
@@ -322,19 +277,11 @@ class SilpoFitAgent:
             result = handler(**arguments)
             return json.dumps(result, ensure_ascii=False, default=str), False
         except Exception as exc:
-            # A ValueError is a tool rejecting its arguments — expected, and
-            # already spelled out in the message the model gets back. Anything
-            # else is a real crash and is worth a traceback.
             if not isinstance(exc, ValueError):
                 log.exception("tool %s raised %s, args=%s", name, type(exc).__name__, preview(arguments, 400))
             return f"{type(exc).__name__}: {exc}", True
 
     def _finalize(self, **arguments: Any) -> str:
-        """Validates the plan before capturing it.
-
-        A rejection travels back to the model as a tool error, so a malformed
-        call costs one retry instead of failing the whole run.
-        """
         try:
             plan = finalize.validate(arguments)
         except ValueError as exc:
@@ -368,7 +315,6 @@ def _retry_after_seconds(exc: errors.ClientError) -> float | None:
 
 
 def _finish_reason(candidate: Any) -> str:
-    """The candidate's finish reason as a plain, loggable name."""
     if candidate is None:
         return "NO_CANDIDATES"
     reason = getattr(candidate, "finish_reason", None)
@@ -391,7 +337,6 @@ def _usage(response: Any) -> dict[str, int]:
 
 
 def _plan_shape(plan: dict[str, Any]) -> str:
-    """A one-line fingerprint of a finished plan, for the run's closing log."""
     summary = plan.get("summary") or {}
     return (
         f"{len(plan.get('days') or [])} days, {len(plan.get('cart') or [])} cart items, "

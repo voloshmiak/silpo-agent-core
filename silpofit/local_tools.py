@@ -1,5 +1,3 @@
-"""Deterministic helpers the model calls instead of doing arithmetic itself."""
-
 from datetime import date, timedelta
 from typing import Any
 
@@ -18,30 +16,17 @@ GOAL_ADJUSTMENT = {
     "gain": 0.15,
 }
 
-# The pace assumed when the user never chose one, kg per week.
 DEFAULT_PACE_KG = {
     "lose": 0.6,
     "gain": 0.3,
 }
 
-# Kilocalories in a kilogram of body mass — what turns a chosen pace
-# (kg per week) into a daily calorie shift.
 KCAL_PER_KG = 7700
 
-# How far under TDEE a day may be planned. A pace is a wish, and past this one
-# it stops describing a week of food; the tool honours it up to here and says
-# what pace that actually buys.
 MIN_TDEE_FACTOR = 0.7
 
-# A day at roughly seven times its target is not a badly planned day — it is
-# the week's totals pasted into one row. A check that only says "off target"
-# sends the model back to rewrite a ration that was never wrong, and that loop
-# is what burns a run's whole step budget. So when a number is off by an order
-# of magnitude, the tools name the likely mistake instead.
 WEEKLY_TOTALS_BAND = (5.0, 9.0)
 
-# Below the weekly band but still far past any real day: a few days summed
-# together, or the cart counted as one day. Both are input mistakes too.
 MULTI_DAY_RATIO = 2.0
 
 
@@ -55,15 +40,6 @@ def calc_targets(
     target_weight_kg: float | None = None,
     weekly_pace_kg: float = 0.0,
 ) -> dict[str, Any]:
-    """Mifflin-St Jeor BMR, activity factor, then a goal-driven calorie shift.
-
-    `weekly_pace_kg` is the pace the user picked in onboarding. Given one, the
-    shift is computed from it instead of from a fixed percentage, so the plan
-    and the user's own choice cannot say different things. It is capped: a pace
-    that would push the day under `MIN_TDEE_FACTOR` of TDEE, or under BMR, is
-    followed only as far as the cap, and the pace that cap actually buys comes
-    back in `weekly_pace_kg` together with a hint saying so.
-    """
     base = 10 * weight_kg + 6.25 * height_cm - 5 * age
     bmr = base + 5 if sex.lower().startswith("m") else base - 161
 
@@ -127,7 +103,6 @@ def calc_targets(
 
 
 def check_nutrition(items: list[dict[str, Any]], daily_kcal: int, days: int = 7) -> dict[str, Any]:
-    """Sums the nutrition of the picked products against the weekly target."""
     totals = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carbs_g": 0.0}
     for item in items:
         portions = float(item.get("total_grams", 0)) / 100 or float(item.get("quantity", 1))
@@ -164,7 +139,6 @@ def _verdict(covered: float) -> str:
 
 
 def _coverage_hint(covered: float, days: int) -> str:
-    """Names the input mistake behind a coverage that is off by an order of magnitude."""
     if covered >= MULTI_DAY_RATIO:
         return (
             f"totals are {covered:.1f}x the {days}-day target — this is an input problem, not a "
@@ -180,18 +154,6 @@ def _coverage_hint(covered: float, days: int) -> str:
 
 
 def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, Any]:
-    """Totals the planned cart and points at what to cut when it overruns.
-
-    `line_items` comes back priced per position, and carries the product's slug
-    and image straight through, so the model can keep working from one list
-    rather than reassembling it by hand while it swaps products around.
-
-    This is an estimate, not the bill. It is fed shelf prices from product
-    search, and Silpo applies the user's personal and promo discounts only when
-    it calculates the cart — so the real total lands several percent lower. The
-    prices that reach the plan are read back off the filled cart; these ones
-    exist to keep the model inside the budget while it is still choosing.
-    """
     priced = []
     for item in items:
         price = float(item.get("price", 0))
@@ -219,12 +181,6 @@ def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, An
 
 
 def sum_macros(entries: list[dict[str, Any]], days: int = 1) -> dict[str, Any]:
-    """Adds up kcal and macros over meals or whole days.
-
-    Whatever the plan needs summed — the four meals of a day, the seven days of
-    a week — goes through here rather than through the model's own arithmetic.
-    An entry's `quantity` multiplies it.
-    """
     totals = {key: 0.0 for key in MACRO_KEYS}
     for entry in entries:
         multiplier = float(entry.get("quantity", 1) or 1)
@@ -246,11 +202,6 @@ def check_plan_days(
     daily_protein_g: int = 0,
     tolerance: float = 0.1,
 ) -> dict[str, Any]:
-    """Compares every planned day against the daily targets.
-
-    Catches days that drifted before the plan is finalized, so the ration and
-    the targets it claims to hit cannot disagree.
-    """
     rows = []
     off_target = []
     hints: list[str] = []
@@ -299,7 +250,6 @@ def check_plan_days(
 
 
 def _scale_hint(ratio: float, subject: str) -> str:
-    """Explains a day that misses its target by an order of magnitude."""
     low, high = WEEKLY_TOTALS_BAND
     if low <= ratio <= high:
         return (

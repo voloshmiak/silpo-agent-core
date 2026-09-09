@@ -1,24 +1,3 @@
-"""The shape of a finished plan.
-
-One definition, used three ways: the JSON Schema the model has to fill in when
-it calls `finalize_plan`, the validation that rejects a malformed call before
-it can reach the caller, and the response model of `POST /plan`. Keeping it in
-one place is what lets the agent's output and the HTTP contract stay in step.
-
-Three conventions matter here. Days are keyed by stable English identifiers
-(`monday`…`sunday`); how a day is named to the reader is the frontend's call,
-not this schema's. And no field is nullable: Gemini handles `anyOf` with
-`type: "null"` poorly, so anything optional gets an empty default instead, and
-nulls the model sends anyway are dropped on the way in.
-
-Money is the third. Every price here is what the user actually pays, which is
-not what product search returns: search prices are shelf prices, and the
-personal and loyalty discounts only materialize in the cart's own calculation.
-So `CartItem` prices and `Summary` totals are copied out of
-silpo_get_shopping_cart_by_id after the cart is filled — never computed from
-search results.
-"""
-
 import re
 from typing import Any, Literal
 
@@ -26,15 +5,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 Day = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
-# What silpo_get_product_details returns as `url` for a product, given its slug.
-# Building the link here rather than letting the model write it means a cart
-# link is always a real product page or nothing at all.
 PRODUCT_URL = "https://silpo.ua/product/{slug}"
 
-# Silpo ends every slug with the product's article number ("banan-32485") and
-# serves every product image from one host. A cart entry that matches neither
-# was invented by the model rather than read off a search result, and a link
-# built from it would 404 — so the shapes are enforced, not trusted.
 PRODUCT_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-\d+$")
 IMAGE_HOST = "https://images.silpo.ua/"
 
@@ -50,8 +22,6 @@ DAYS: tuple[str, ...] = (
 
 
 class _Model(BaseModel):
-    """Base that treats a null from the model as 'field not provided'."""
-
     @model_validator(mode="before")
     @classmethod
     def _drop_nulls(cls, data: Any) -> Any:
@@ -68,8 +38,6 @@ class Macros(_Model):
 
 
 class Targets(Macros):
-    """The daily norm the ration was built against, as returned by calc_targets."""
-
     estimated_weeks_to_goal: float = Field(
         0.0, description="Орієнтовний строк досягнення цільової ваги, тижнів (з calc_targets)"
     )
@@ -86,8 +54,6 @@ class Meal(Macros):
 
 
 class DayPlan(Macros):
-    """One day of the ration; the inherited macros are that day's totals."""
-
     day: Day = Field(description="Ключ дня: monday…sunday")
     workout: bool = Field(False, description="Чи є цього дня тренування")
     breakfast: Meal
@@ -121,13 +87,6 @@ class CartItem(_Model):
 
     @model_validator(mode="after")
     def _line_total_matches(self) -> "CartItem":
-        """Catches a unit price passed where the line total belongs, and vice versa.
-
-        The tolerance is loose on purpose: `price` comes back from Silpo already
-        rounded, so `price × quantity` and the cart's own `total` can disagree by
-        a kopiyka on a weighted position. What it does catch is an order-of-
-        magnitude mix-up — 2 шт priced as one, or a per-kg price used as a line.
-        """
         expected = round(self.price * self.quantity, 2)
         if abs(expected - self.total_price) > max(0.05, expected * 0.02):
             raise ValueError(
@@ -141,7 +100,6 @@ class CartItem(_Model):
 
     @model_validator(mode="after")
     def _link_from_slug(self) -> "CartItem":
-        """Rejects an invented product, then derives its link from the slug."""
         if not PRODUCT_SLUG.match(self.slug):
             raise ValueError(
                 f"«{self.name}»: slug {self.slug!r} не з «Сільпо». Справжній slug "
@@ -189,8 +147,6 @@ class Summary(_Model):
 
 
 class Plan(_Model):
-    """The finished weekly plan — the whole deliverable of a run."""
-
     targets: Targets
     days: list[DayPlan] = Field(
         description="Рівно 7 днів, від monday до sunday, кожен день без пропусків",

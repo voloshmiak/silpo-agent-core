@@ -1,14 +1,3 @@
-"""Local MCP client for the official Silpo server.
-
-The Interactions API can attach a remote MCP server itself, but that path does
-not work with Gemini 3 models yet, so the agent runs its own MCP client and
-bridges the server's tools into ordinary function calling.
-
-The agent never performs the Silpo OAuth flow itself — the calling backend
-owns user authorization and hands this class an already-valid access token
-for a single request's lifetime.
-"""
-
 import json
 import logging
 import time
@@ -25,12 +14,10 @@ log = logging.getLogger(__name__)
 
 
 class SilpoTokenExpired(RuntimeError):
-    """The Silpo access token the caller supplied was rejected (HTTP 401)."""
+    pass
 
 
 class SilpoMCP:
-    """A Silpo MCP session authenticated with a caller-supplied access token."""
-
     def __init__(self, mcp_url: str, access_token: str) -> None:
         self._mcp_url = mcp_url
         self._access_token = access_token
@@ -41,9 +28,6 @@ class SilpoMCP:
         http_client = await self._stack.enter_async_context(
             create_mcp_http_client(headers={"Authorization": f"Bearer {self._access_token}"})
         )
-        # The MCP SDK swallows the real HTTP status of a rejected token into a
-        # generic JSON-RPC "-32603 internal error", so check it ourselves first
-        # to give the caller an unambiguous, machine-readable failure.
         await self._check_token(http_client)
         self._client = await self._stack.enter_async_context(
             Client(streamable_http_client(self._mcp_url, http_client=http_client))
@@ -93,13 +77,10 @@ class SilpoMCP:
         return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Calls an MCP tool and flattens the result into text for the model."""
         started = time.monotonic()
         try:
             result = await self.client.call_tool(name, arguments)
         except Exception:
-            # The agent turns this into a tool error for the model; without a
-            # log line here the transport failure itself would be invisible.
             log.exception("MCP %s raised after %.0fms", name, (time.monotonic() - started) * 1000)
             raise
         text = _flatten(result)

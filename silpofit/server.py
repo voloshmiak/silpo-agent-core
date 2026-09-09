@@ -1,10 +1,3 @@
-"""HTTP entry point.
-
-SilpoFit runs as a stateless agent service: the calling backend owns user
-authorization, profiles and history, and sends everything the agent needs in
-one request. The agent holds nothing between requests — no tokens, no plans.
-"""
-
 import json
 import logging
 import time
@@ -45,7 +38,6 @@ _bearer = HTTPBearer(
 def require_service_token(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> None:
-    """Authenticates the calling backend, not the end user."""
     if not settings.service_tokens:
         raise HTTPException(500, "SILPOFIT_SERVICE_TOKENS is not configured")
     if creds is None or creds.credentials not in settings.service_tokens:
@@ -128,14 +120,6 @@ async def _run(access_token: str, prompt: str, *, apply: bool) -> Plan:
 
 
 async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator[str, None]:
-    """Same run as `_run`, but yielded as SSE frames instead of collected into
-    one response. The HTTP status and headers are already sent by the time
-    an agent failure can happen, so failures become a terminal `error` event
-    instead of an HTTP error status.
-
-    Every frame carries the run id, and the stream is guaranteed to end on a
-    `plan` or an `error` — a client that sees neither has lost the connection,
-    which is the one failure this generator cannot report to it."""
     run_id = logs.new_run_id()
     log.info("POST /plan/stream (apply=%s, prompt=%d chars)", apply, len(prompt))
     started = time.monotonic()
@@ -152,9 +136,6 @@ async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator
                 yield _frame(event, run_id)
 
         if terminal is None:
-            # The agent loop always ends on a terminal event, so reaching this
-            # means the loop itself was cut short — worth a loud line, and the
-            # client still needs an ending it can act on.
             log.error("stream ended with no terminal event after %.1fs, events=%s", time.monotonic() - started, counts)
             yield _frame({"type": "error", "message": "agent stream ended without a plan"}, run_id)
             terminal = "error"
@@ -163,8 +144,6 @@ async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator
         terminal = "error"
         yield _frame({"type": "error", "code": "silpo_token_expired", "message": str(exc)}, run_id)
     except GeneratorExit:
-        # The client hung up mid-run: nothing can be sent, so the only trace
-        # left of this run is this line.
         log.warning(
             "client disconnected after %.1fs, events=%s, terminal=%s",
             time.monotonic() - started,
@@ -186,6 +165,4 @@ async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator
 
 
 def _frame(event: dict[str, Any], run_id: str) -> str:
-    """One SSE frame, stamped with the run id so a frontend error report can
-    be matched to the run's log lines."""
     return f"data: {json.dumps({**event, 'run_id': run_id}, ensure_ascii=False)}\n\n"

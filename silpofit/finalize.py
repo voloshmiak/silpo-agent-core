@@ -1,17 +1,3 @@
-"""The agent's only 'memory' tool: capturing the finished plan for the caller.
-
-The agent is stateless — it does not persist anything itself. Its last tool
-call in every run must be finalize_plan; the agent loop intercepts that call,
-validates the payload against `plan_schema.Plan` and hands it back to the
-caller (an HTTP backend) as the run's result, instead of writing it anywhere
-locally. The whole answer lives in this call's arguments — there is no final
-text turn after it.
-
-The tool's parameter schema is generated from the Pydantic model rather than
-written out by hand, so what the model is asked for and what the API returns
-can never drift apart.
-"""
-
 from typing import Any
 
 from pydantic import ValidationError
@@ -36,7 +22,6 @@ DECLARATION = {
 
 
 def validate(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Returns the normalized plan, or raises with a message the model can act on."""
     try:
         return Plan.model_validate(arguments).model_dump()
     except ValidationError as exc:
