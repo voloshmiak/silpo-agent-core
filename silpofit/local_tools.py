@@ -18,6 +18,21 @@ GOAL_ADJUSTMENT = {
     "gain": 0.15,
 }
 
+# The pace assumed when the user never chose one, kg per week.
+DEFAULT_PACE_KG = {
+    "lose": 0.6,
+    "gain": 0.3,
+}
+
+# Kilocalories in a kilogram of body mass — what turns a chosen pace
+# (kg per week) into a daily calorie shift.
+KCAL_PER_KG = 7700
+
+# How far under TDEE a day may be planned. A pace is a wish, and past this one
+# it stops describing a week of food; the tool honours it up to here and says
+# what pace that actually buys.
+MIN_TDEE_FACTOR = 0.7
+
 # A day at roughly seven times its target is not a badly planned day — it is
 # the week's totals pasted into one row. A check that only says "off target"
 # sends the model back to rewrite a ration that was never wrong, and that loop
@@ -38,8 +53,17 @@ def calc_targets(
     goal: str,
     workouts_per_week: int = 0,
     target_weight_kg: float | None = None,
+    weekly_pace_kg: float = 0.0,
 ) -> dict[str, Any]:
-    """Mifflin-St Jeor BMR, activity factor, then a goal-driven calorie shift."""
+    """Mifflin-St Jeor BMR, activity factor, then a goal-driven calorie shift.
+
+    `weekly_pace_kg` is the pace the user picked in onboarding. Given one, the
+    shift is computed from it instead of from a fixed percentage, so the plan
+    and the user's own choice cannot say different things. It is capped: a pace
+    that would push the day under `MIN_TDEE_FACTOR` of TDEE, or under BMR, is
+    followed only as far as the cap, and the pace that cap actually buys comes
+    back in `weekly_pace_kg` together with a hint saying so.
+    """
     base = 10 * weight_kg + 6.25 * height_cm - 5 * age
     bmr = base + 5 if sex.lower().startswith("m") else base - 161
 
@@ -53,7 +77,25 @@ def calc_targets(
         activity = "sedentary"
 
     tdee = bmr * ACTIVITY_FACTORS[activity]
-    calories = tdee * (1 + GOAL_ADJUSTMENT.get(goal, 0.0))
+
+    pace = abs(float(weekly_pace_kg or 0.0))
+    hint = ""
+    if pace and goal in ("lose", "gain"):
+        shift = pace * KCAL_PER_KG / 7
+        calories = tdee - shift if goal == "lose" else tdee + shift
+        floor = max(tdee * MIN_TDEE_FACTOR, bmr)
+        if calories < floor:
+            calories = floor
+            capped = (tdee - calories) * 7 / KCAL_PER_KG
+            hint = (
+                f"{pace} kg/week would mean eating under {round(floor)} kcal a day; the targets "
+                f"below hold the safe floor instead, which is about {round(capped, 2)} kg/week. Say so "
+                "in summary.notes."
+            )
+            pace = capped
+    else:
+        calories = tdee * (1 + GOAL_ADJUSTMENT.get(goal, 0.0))
+        pace = DEFAULT_PACE_KG.get(goal, 0.0)
 
     protein_g = weight_kg * (2.0 if goal == "lose" else 1.8)
     fat_g = weight_kg * 0.9
@@ -61,13 +103,12 @@ def calc_targets(
 
     weeks = 0.0
     goal_date = ""
-    if target_weight_kg is not None and goal in ("lose", "gain"):
+    if target_weight_kg is not None and goal in ("lose", "gain") and pace > 0:
         delta = abs(weight_kg - target_weight_kg)
-        weekly_change = 0.6 if goal == "lose" else 0.3
-        weeks = round(delta / weekly_change, 1)
+        weeks = round(delta / pace, 1)
         goal_date = (date.today() + timedelta(days=round(weeks * 7))).isoformat()
 
-    return {
+    result = {
         "bmr_kcal": round(bmr),
         "tdee_kcal": round(tdee),
         "activity_level": activity,
@@ -76,9 +117,13 @@ def calc_targets(
         "daily_protein_g": round(protein_g),
         "daily_fat_g": round(fat_g),
         "daily_carbs_g": round(carbs_g),
+        "weekly_pace_kg": round(pace, 2),
         "estimated_weeks_to_goal": weeks,
         "estimated_goal_date": goal_date,
     }
+    if hint:
+        result["hint"] = hint
+    return result
 
 
 def check_nutrition(items: list[dict[str, Any]], daily_kcal: int, days: int = 7) -> dict[str, Any]:
@@ -280,7 +325,9 @@ DECLARATIONS = [
         "name": "calc_targets",
         "description": (
             "Calculates BMR, TDEE, daily calorie/macro targets and the estimated time to "
-            "reach the goal weight. Always call this before planning a ration."
+            "reach the goal weight. Always call this before planning a ration. Pass the "
+            "user's chosen weekly pace when the request carries one — the calorie deficit "
+            "and the estimated time to goal are both built from it."
         ),
         "parameters": {
             "type": "object",
@@ -292,6 +339,13 @@ DECLARATIONS = [
                 "goal": {"type": "string", "enum": ["lose", "maintain", "gain"]},
                 "workouts_per_week": {"type": "integer", "description": "Workouts per week, 0-7"},
                 "target_weight_kg": {"type": "number", "description": "Goal weight in kg"},
+                "weekly_pace_kg": {
+                    "type": "number",
+                    "description": (
+                        "The pace of weight change the user chose, kg per week, as given in "
+                        "the user message. Omit it only when the message has none."
+                    ),
+                },
             },
             "required": ["weight_kg", "height_cm", "age", "sex", "goal"],
         },

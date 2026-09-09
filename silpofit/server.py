@@ -8,12 +8,11 @@ one request. The agent holds nothing between requests — no tokens, no plans.
 import json
 import logging
 import time
-from typing import Any, AsyncGenerator, Literal
+from typing import Any, AsyncGenerator
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
 
 from . import logs
 from .agent import AgentResult, SilpoFitAgent
@@ -21,6 +20,7 @@ from .config import Settings
 from .mcp_client import SilpoMCP, SilpoTokenExpired
 from .plan_schema import Plan
 from .prompts import build_plan_prompt
+from .request_schema import PlanRequest
 
 logs.setup_logging()
 log = logging.getLogger(__name__)
@@ -50,25 +50,6 @@ def require_service_token(
         raise HTTPException(500, "SILPOFIT_SERVICE_TOKENS is not configured")
     if creds is None or creds.credentials not in settings.service_tokens:
         raise HTTPException(401, "invalid or missing service token")
-
-
-class Profile(BaseModel):
-    weight_kg: float
-    target_weight_kg: float
-    height_cm: float | None = None
-    age: int | None = None
-    sex: Literal["male", "female"] | None = None
-
-
-class PlanRequest(BaseModel):
-    silpo_access_token: str
-    profile: Profile
-    budget_uah: float
-    workouts_per_week: int = 0
-    fridge_items: list[str] = Field(default_factory=list)
-    note: str = ""
-    previous_plan: dict[str, Any] | None = None
-    apply: bool = False
 
 
 log.info(
@@ -111,8 +92,16 @@ def _plan_prompt(body: PlanRequest) -> str:
         height_cm=body.profile.height_cm,
         age=body.profile.age,
         sex=body.profile.sex,
+        goal=body.goal,
+        weekly_pace_kg=body.weekly_pace_kg,
         budget_uah=body.budget_uah,
+        promo_priority=body.promo_priority,
+        delivery_included=body.delivery_included,
         workouts_per_week=body.workouts_per_week,
+        workout_schedule=body.workout_schedule,
+        diet_type=body.diet_type,
+        allergens=body.allergens,
+        excluded_products=body.excluded_products,
         fridge_items=body.fridge_items,
         note=body.note,
         previous_plan=body.previous_plan,
