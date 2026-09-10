@@ -14,6 +14,7 @@ from .mcp_client import SilpoMCP, SilpoTokenExpired
 from .plan_schema import Plan
 from .prompts import build_plan_prompt
 from .request_schema import PlanRequest
+from .validator import PlanContext
 
 logs.setup_logging()
 log = logging.getLogger(__name__)
@@ -45,10 +46,13 @@ def require_service_token(
 
 
 log.info(
-    "SilpoFit starting: model=%s thinking=%s max_steps=%d mcp=%s service_tokens=%d",
+    "SilpoFit starting: model=%s thinking=%s max_steps=%d validation=%s mcp=%s service_tokens=%d",
     settings.model,
     settings.thinking_level,
     settings.max_steps,
+    f"{settings.review_model}/{settings.review_thinking_level} x{settings.validation_rounds}"
+    if settings.validation_rounds > 0
+    else "off",
     settings.mcp_url,
     len(settings.service_tokens),
 )
@@ -62,17 +66,28 @@ async def health() -> dict[str, str]:
 @app.post("/plan", dependencies=[Depends(require_service_token)], response_model=Plan)
 async def plan(body: PlanRequest) -> Plan:
     """The finished weekly plan: targets, seven days of meals, cart, summary."""
-    return await _run(body.silpo_access_token, _plan_prompt(body), apply=body.apply)
+    return await _run(
+        body.silpo_access_token,
+        _plan_prompt(body),
+        apply=body.apply,
+        context=PlanContext.from_request(body),
+    )
 
 
 @app.post("/plan/stream", dependencies=[Depends(require_service_token)])
 async def plan_stream(body: PlanRequest) -> StreamingResponse:
     """SSE: `tool_call`/`tool_result` events while the agent is calling MCP
-    tools, then one terminal `plan` event carrying the same JSON object that
-    `POST /plan` returns (or `error` if the run fails). No prose is streamed —
-    the plan is the answer."""
+    tools, a `validation` event every time the plan is reviewed, then one
+    terminal `plan` event carrying the same JSON object that `POST /plan`
+    returns (or `error` if the run fails). No prose is streamed — the plan is
+    the answer."""
     return StreamingResponse(
-        _sse(body.silpo_access_token, _plan_prompt(body), apply=body.apply),
+        _sse(
+            body.silpo_access_token,
+            _plan_prompt(body),
+            apply=body.apply,
+            context=PlanContext.from_request(body),
+        ),
         media_type="text/event-stream",
     )
 
@@ -100,7 +115,7 @@ def _plan_prompt(body: PlanRequest) -> str:
     )
 
 
-async def _run(access_token: str, prompt: str, *, apply: bool) -> Plan:
+async def _run(access_token: str, prompt: str, *, apply: bool, context: PlanContext) -> Plan:
     run_id = logs.new_run_id()
     log.info("POST /plan (apply=%s, prompt=%d chars)", apply, len(prompt))
     started = time.monotonic()
@@ -108,7 +123,7 @@ async def _run(access_token: str, prompt: str, *, apply: bool) -> Plan:
         async with SilpoMCP(settings.mcp_url, access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
             await agent.prepare()
-            result: AgentResult = await agent.run(prompt, apply=apply)
+            result: AgentResult = await agent.run(prompt, apply=apply, context=context)
     except SilpoTokenExpired as exc:
         log.warning("POST /plan → 409 silpo_token_expired after %.1fs", time.monotonic() - started)
         raise HTTPException(409, {"code": "silpo_token_expired", "message": str(exc)}) from exc
@@ -119,7 +134,9 @@ async def _run(access_token: str, prompt: str, *, apply: bool) -> Plan:
     return Plan.model_validate(result.plan)
 
 
-async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator[str, None]:
+async def _sse(
+    access_token: str, prompt: str, *, apply: bool, context: PlanContext
+) -> AsyncGenerator[str, None]:
     run_id = logs.new_run_id()
     log.info("POST /plan/stream (apply=%s, prompt=%d chars)", apply, len(prompt))
     started = time.monotonic()
@@ -129,7 +146,7 @@ async def _sse(access_token: str, prompt: str, *, apply: bool) -> AsyncGenerator
         async with SilpoMCP(settings.mcp_url, access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
             await agent.prepare()
-            async for event in agent.run_stream(prompt, apply=apply):
+            async for event in agent.run_stream(prompt, apply=apply, context=context):
                 counts[event["type"]] = counts.get(event["type"], 0) + 1
                 if event["type"] in ("plan", "error"):
                     terminal = event["type"]

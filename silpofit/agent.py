@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -13,6 +14,7 @@ from .config import Settings
 from .logs import preview
 from .mcp_client import SilpoMCP
 from .tool_bridge import MUTATING_TOOLS, select_tools
+from .validator import Issue, PlanContext, PlanValidator, format_issues
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +48,11 @@ class SilpoFitAgent:
         self._mcp_tool_names: set[str] = set()
         self._apply = False
         self._captured_plan: dict[str, Any] | None = None
+        self._validator = PlanValidator(self._genai, settings)
+        self._context = PlanContext()
+        self._user_input = ""
+        self._validation_round = 0
+        self._pending: list[dict[str, Any]] = []
 
     async def prepare(self) -> None:
         mcp_tools = await self._mcp.list_tools()
@@ -75,8 +82,10 @@ class SilpoFitAgent:
             len(local_tools.DECLARATIONS),
         )
 
-    async def run(self, user_input: str, *, apply: bool = False) -> AgentResult:
-        async for event in self.run_stream(user_input, apply=apply):
+    async def run(
+        self, user_input: str, *, apply: bool = False, context: PlanContext | None = None
+    ) -> AgentResult:
+        async for event in self.run_stream(user_input, apply=apply, context=context):
             if event["type"] == "plan":
                 return AgentResult(plan=event["plan"])
             if event["type"] == "error":
@@ -84,9 +93,15 @@ class SilpoFitAgent:
         log.error("run_stream ended without a terminal event — this should be unreachable")
         raise RuntimeError("agent produced no plan")
 
-    async def run_stream(self, user_input: str, *, apply: bool = False) -> AsyncGenerator[dict[str, Any], None]:
+    async def run_stream(
+        self, user_input: str, *, apply: bool = False, context: PlanContext | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         self._apply = apply
         self._captured_plan = None
+        self._context = context or PlanContext()
+        self._user_input = user_input
+        self._validation_round = 0
+        self._pending = []
 
         system_instruction = prompts.SYSTEM_INSTRUCTION
         if not apply:
@@ -163,6 +178,8 @@ class SilpoFitAgent:
                     log.debug("step %d <- %s result: %s", step_number, call.name, preview(result_text, 1000))
 
                 yield _event("tool_result", tool=call.name, ok=not is_error, result=_truncate(result_text))
+                while self._pending:
+                    yield self._pending.pop(0)
 
                 response_parts.append(
                     types.Part.from_function_response(
@@ -275,22 +292,58 @@ class SilpoFitAgent:
                 log.error("model called an unknown tool: %s", name)
                 return f"Unknown tool: {name}", True
             result = handler(**arguments)
+            if inspect.isawaitable(result):
+                result = await result
             return json.dumps(result, ensure_ascii=False, default=str), False
         except Exception as exc:
             if not isinstance(exc, ValueError):
                 log.exception("tool %s raised %s, args=%s", name, type(exc).__name__, preview(arguments, 400))
             return f"{type(exc).__name__}: {exc}", True
 
-    def _finalize(self, **arguments: Any) -> str:
+    async def _finalize(self, **arguments: Any) -> str:
         try:
             plan = finalize.validate(arguments)
         except ValueError as exc:
             log.warning("%s rejected: %s", finalize.TOOL_NAME, preview(str(exc), 1500))
             log.debug("%s payload was: %s", finalize.TOOL_NAME, preview(arguments, 4000))
             raise
+
+        issues = await self._validate(plan)
+        if issues:
+            message = format_issues(issues)
+            log.warning("%s sent back for fixes: %s", finalize.TOOL_NAME, preview(message, 1500))
+            raise ValueError(message)
+
         self._captured_plan = plan
         log.info("%s accepted: %s", finalize.TOOL_NAME, _plan_shape(plan))
         return "recorded"
+
+    async def _validate(self, plan: dict[str, Any]) -> list[Issue]:
+        rounds = self._settings.validation_rounds
+        if rounds <= 0:
+            return []
+
+        self._validation_round += 1
+        issues = await self._validator.check(plan, self._context, self._user_input)
+        exhausted = bool(issues) and self._validation_round > rounds
+        self._pending.append(
+            _event(
+                "validation",
+                ok=not issues,
+                round=self._validation_round,
+                accepted=not issues or exhausted,
+                issues=[issue.as_dict() for issue in issues],
+            )
+        )
+        if exhausted:
+            log.error(
+                "plan accepted with %d unresolved issue(s) after %d validation round(s): %s",
+                len(issues),
+                rounds,
+                preview(format_issues(issues), 1500),
+            )
+            return []
+        return issues
 
 
 def _text_of(parts: list[types.Part]) -> str:

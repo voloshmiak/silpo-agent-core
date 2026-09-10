@@ -95,6 +95,7 @@ silpofit/
   tool_bridge.py     MCP tool allowlist → Gemini function declarations; MUTATING_TOOLS gate
   local_tools.py     deterministic math the model must not do itself (calc_targets, checks)
   finalize.py        the terminal finalize_plan tool: validates and captures the plan
+  validator.py       the second agent: deterministic audit + a reviewing model over the plan
   plan_schema.py     the output contract — one Pydantic model used three ways
   logs.py            run-id-stamped logging
 Dockerfile           uv build → python:3.14-slim; CMD must read $PORT at runtime
@@ -116,9 +117,12 @@ read it before adding, renaming or removing any field on either side.
    tools + `finalize_plan`.
 3. `run_stream()` loops up to `MAX_STEPS` (60): one model turn → dispatch every
    function call → feed the results back.
-4. The run ends the moment `finalize_plan` validates. **There is no final prose
-   turn** — the plan is the entire answer. A turn that comes back with no tool
-   calls is a *failed* run, not an answer.
+4. `finalize_plan` hands the plan to the **validator** (below). A rejected plan
+   comes back to the planning model as a `finalize_plan` error listing what to
+   fix, and the loop continues.
+5. The run ends the moment `finalize_plan` validates *and* the validator accepts.
+   **There is no final prose turn** — the plan is the entire answer. A turn that
+   comes back with no tool calls is a *failed* run, not an answer.
 
 `run_stream` is the source of truth; `run()` just drains it, and `/plan/stream`
 re-emits its events as SSE (`tool_call`, `tool_result`, then a terminal `plan` or
@@ -130,6 +134,28 @@ check → promotions → budget check → per-day check → fill cart and re-rea
 finalize.
 
 ## Non-obvious rules (the ones that break things)
+
+**The plan is reviewed by a second agent, and the review is a tool error.**
+`agent._finalize` runs `finalize.validate` (Pydantic), then `validator.check`:
+first `audit()` — deterministic checks over money, day totals against `targets`,
+workout flags against the request's schedule, empty carts, duplicate slugs — and,
+only when the audit is clean, one tool-less Gemini call (`prompts.REVIEW_INSTRUCTION`,
+JSON-schema output) for the things arithmetic cannot see: dishes built from
+products that are in neither the cart nor the fridge, quantities that do not cover
+the week, allergens hiding in a product's composition, re-buying what the user
+already has. Issues come back to the planning model as a numbered Ukrainian
+`finalize_plan` rejection, which is the same repair path a schema error already
+takes — that is why the reviewer needs no tools and no new endpoint.
+The split is deliberate: **arithmetic is code, meaning is the model.** Never move
+a check that can be computed into the review prompt, and never make the reviewing
+model re-add numbers — it will hallucinate a disagreement and the run will loop.
+
+**The review fails open, and it gives up.** A review call that raises is logged
+and the plan is accepted — a quality gate must not turn a good run into a 502.
+After `SILPOFIT_VALIDATION_ROUNDS` (2) rejections the next plan is accepted with
+its issues unresolved, logged at ERROR and streamed as `validation` with
+`accepted: true, ok: false`. Both are better than a run that never terminates.
+Each round costs a model turn from `MAX_STEPS` plus ~7s of review.
 
 **Two independent credentials.** The `Authorization: Bearer` header authenticates
 the *calling backend* (`SILPOFIT_SERVICE_TOKENS`, comma-separated). The *end user's*
@@ -206,6 +232,9 @@ the user's Silpo token.
 | `SILPOFIT_SERVICE_TOKENS` | comma-separated backend tokens; empty ⇒ every `/plan` returns 500 |
 | `SILPOFIT_MODEL` | overrides `config.MODEL` (currently `gemini-3.5-flash-lite`) |
 | `SILPOFIT_THINKING_LEVEL` | `MINIMAL` < `LOW` < `MEDIUM` < `HIGH`; raise if plans degrade |
+| `SILPOFIT_VALIDATION_ROUNDS` | how many times the validator may send a plan back (default 2); `0` turns the review off |
+| `SILPOFIT_VALIDATOR_MODEL` | model for the review call; defaults to `SILPOFIT_MODEL` |
+| `SILPOFIT_VALIDATOR_THINKING_LEVEL` | thinking level for the review call; defaults to `SILPOFIT_THINKING_LEVEL` |
 | `SILPOFIT_LOG_LEVEL` | default `INFO` |
 | `PORT` | injected by Cloud Run; the Dockerfile `CMD` must stay in shell form so it expands |
 
