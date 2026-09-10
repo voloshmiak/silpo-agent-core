@@ -34,6 +34,8 @@ MAX_RATE_LIMIT_RETRIES = 5
 
 AUDIT_EXTRA_ROUNDS = 2
 
+MAX_EMPTY_TURNS = 3
+
 
 @dataclass
 class AgentResult:
@@ -127,6 +129,7 @@ class SilpoFitAgent:
         started = time.monotonic()
         calls_made = 0
         calls_failed = 0
+        empty_turns = 0
         log.info(
             "run start: model=%s apply=%s max_steps=%d prompt=%d chars",
             self._settings.model,
@@ -138,16 +141,37 @@ class SilpoFitAgent:
 
         for step_number in range(1, self._settings.max_steps + 1):
             turn = await self._generate(history, system_instruction, step_number)
-            history.append(types.Content(role="model", parts=turn.parts or [types.Part(text="")]))
-
             calls = [part.function_call for part in turn.parts if part.function_call]
+
             if not calls:
                 text = _text_of(turn.parts)
+                empty_turns += 1
+                if empty_turns <= MAX_EMPTY_TURNS:
+                    log.warning(
+                        "step %d/%d came back with no tool calls (finish=%s, parts=%d) — "
+                        "retrying (%d/%d), model said: %s",
+                        step_number,
+                        self._settings.max_steps,
+                        turn.finish_reason,
+                        len(turn.parts),
+                        empty_turns,
+                        MAX_EMPTY_TURNS,
+                        preview(text, 600) or "(nothing)",
+                    )
+                    if turn.parts:
+                        history.append(types.Content(role="model", parts=turn.parts))
+                        history.append(
+                            types.Content(
+                                role="user", parts=[types.Part(text=prompts.NO_TOOL_CALL_NUDGE)]
+                            )
+                        )
+                    continue
                 log.error(
-                    "run failed at step %d/%d: no tool calls, finish_reason=%s, parts=%d, "
-                    "calls_so_far=%d, model said: %s",
+                    "run failed at step %d/%d: %d turns with no tool calls, finish_reason=%s, "
+                    "parts=%d, calls_so_far=%d, model said: %s",
                     step_number,
                     self._settings.max_steps,
+                    empty_turns,
                     turn.finish_reason,
                     len(turn.parts),
                     calls_made,
@@ -158,9 +182,13 @@ class SilpoFitAgent:
                     message=f"agent stopped without calling {finalize.TOOL_NAME}",
                     finish_reason=turn.finish_reason,
                     step=step_number,
+                    empty_turns=empty_turns,
                     text=_truncate(text, 500),
                 )
                 return
+
+            empty_turns = 0
+            history.append(types.Content(role="model", parts=turn.parts))
 
             response_parts = []
             for call in calls:

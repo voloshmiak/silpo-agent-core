@@ -121,8 +121,9 @@ read it before adding, renaming or removing any field on either side.
    comes back to the planning model as a `finalize_plan` error listing what to
    fix, and the loop continues.
 5. The run ends the moment `finalize_plan` validates *and* the validator accepts.
-   **There is no final prose turn** — the plan is the entire answer. A turn that
-   comes back with no tool calls is a *failed* run, not an answer.
+   **There is no final prose turn** — the plan is the entire answer. A turn with no
+   tool calls is never an answer, but it is not fatal either: it is retried up to
+   `MAX_EMPTY_TURNS` (3) before the run gives up.
 
 `run_stream` is the source of truth; `run()` just drains it, and `/plan/stream`
 re-emits its events as SSE (`tool_call`, `tool_result`, then a terminal `plan` or
@@ -225,6 +226,18 @@ Without them product search silently returns **zero results** — which reads li
 against `IMAGE_HOST`. The product page URL is *derived* from the slug, never written
 by the model. `total_price` is cross-checked against `price × quantity` to catch a
 unit price used as a line total.
+
+**An empty model turn is retried, not fatal.** Gemini can return a candidate with
+`finish_reason=STOP`, zero parts and zero output tokens — one observed run died at
+step 1 this way, on a 96k-token prompt, after 476 thought tokens and nothing else.
+Killing a whole run over one flaky turn is the wrong trade, so `run_stream` retries:
+a turn with no parts at all is dropped from the history entirely and the request is
+simply reissued (nothing to round-trip, so no `thought_signature` to lose), while a
+turn that produced prose instead of a call is kept and answered with
+`prompts.NO_TOOL_CALL_NUDGE`. The counter resets after any turn that does call a tool,
+so it bounds *consecutive* failures, and each retry spends one of `MAX_STEPS`. The
+terminal `error` event carries `empty_turns` so the backend can tell a stuck model
+from a genuine dead end.
 
 **A weighted product's `quantity` is always in kilograms** — `weighted: true` decides
 it, never the label. Silpo returns `displayRatio`/`ratio` as display context only:
