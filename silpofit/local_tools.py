@@ -25,6 +25,8 @@ KCAL_PER_KG = 7700
 
 MIN_TDEE_FACTOR = 0.7
 
+BUDGET_TARGET_FLOOR = 0.7
+
 WEEKLY_TOTALS_BAND = (5.0, 9.0)
 
 MULTI_DAY_RATIO = 2.0
@@ -183,14 +185,27 @@ def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, An
         )
 
     total = round(sum(p["total_price"] for p in priced), 2)
-    return {
+    remaining = round(budget_uah - total, 2)
+    utilisation = round(total / budget_uah, 2) if budget_uah else 0.0
+    result = {
         "total_uah": total,
         "budget_uah": budget_uah,
-        "remaining_uah": round(budget_uah - total, 2),
+        "remaining_uah": remaining,
+        "utilisation": utilisation,
         "over_budget": total > budget_uah,
         "line_items": priced,
         "most_expensive": sorted(priced, key=lambda p: p["total_price"], reverse=True)[:5],
     }
+    if budget_uah and not result["over_budget"] and utilisation < BUDGET_TARGET_FLOOR:
+        result["hint"] = (
+            f"only {utilisation:.0%} of the budget is used, {remaining} UAH is free. The budget is a "
+            "target, not just a ceiling: spend the room on VARIETY and QUALITY at the same calories — "
+            "a different protein source and side on different days, more vegetables and fruit, better "
+            "cuts and brands. Do NOT buy more food: the daily calorie target is fixed, and a bigger "
+            "cart of the same products fails the per-day checks. If the ration genuinely cannot absorb "
+            "the rest, say so in summary.notes."
+        )
+    return result
 
 
 def sum_macros(entries: list[dict[str, Any]], days: int = 1) -> dict[str, Any]:

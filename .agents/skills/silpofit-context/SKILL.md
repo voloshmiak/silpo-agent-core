@@ -360,6 +360,18 @@ this into returning the text alone: Silpo answers HTTP 200 with an error payload
 when that reaches the model labelled as a success it retries the same broken call with
 a different invented argument instead of changing course.
 
+**The budget is a target, not only a ceiling — but under-use is a hint, never a gate.**
+`check_budget` returns `utilisation` and, below 0.7, a hint telling the model to spend
+the room on variety and quality **at the same calories**. Deliberately not an audit
+rejection: the daily calorie target is fixed, so "spend more" and "hit the per-day
+kcal band" are constraints on the same number, and a hard gate on both would ping-pong
+the model exactly as the day-total checks once did — it would pad the cart, fail the day
+checks, shrink it, fail the budget check. A hint reaches the model *while it is still
+choosing products*, before the plan is locked; the reviewer's rule 8 then catches the one
+case that is unambiguously wrong — the same dish on six or seven days while a third of
+the budget sits unspent. Observed runs spent 1938 and 2452 UAH of a 10000 budget with
+eight identical-ish products, which is what the old ceiling-only wording asked for.
+
 **Arithmetic is a tool, not a model job.** `calc_targets`, `sum_macros`,
 `check_nutrition`, `check_budget` and `check_plan_days` exist so the numbers are
 deterministic. Their `hint` fields diagnose *input* mistakes (a week's totals pasted
