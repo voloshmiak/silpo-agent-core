@@ -14,7 +14,14 @@ from .config import Settings
 from .logs import preview
 from .mcp_client import SilpoMCP
 from .tool_bridge import MUTATING_TOOLS, select_tools
-from .validator import Issue, PlanContext, PlanValidator, check_grounding, format_issues
+from .validator import (
+    Issue,
+    PlanContext,
+    PlanValidator,
+    check_cart_match,
+    check_grounding,
+    format_issues,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +63,7 @@ class SilpoFitAgent:
         self._validations = 0
         self._rounds_used: dict[str, int] = {"audit": 0, "review": 0}
         self._mcp_ok: set[str] = set()
+        self._cart_id = ""
         self._pending: list[dict[str, Any]] = []
 
     async def prepare(self) -> None:
@@ -107,6 +115,7 @@ class SilpoFitAgent:
         self._validations = 0
         self._rounds_used = {"audit": 0, "review": 0}
         self._mcp_ok = set()
+        self._cart_id = ""
         self._pending = []
 
         system_instruction = prompts.SYSTEM_INSTRUCTION
@@ -185,6 +194,9 @@ class SilpoFitAgent:
 
                 if not is_error and call.name in self._mcp_tool_names:
                     self._mcp_ok.add(call.name)
+                    cart_id = arguments.get("shoppingCartId")
+                    if isinstance(cart_id, str) and cart_id:
+                        self._cart_id = cart_id
 
                 yield _event("tool_result", tool=call.name, ok=not is_error, result=_truncate(result_text))
                 while self._pending:
@@ -340,7 +352,9 @@ class SilpoFitAgent:
                 ", ".join(sorted(self._mcp_ok)) or "none",
             )
         else:
-            issues = await self._validator.check(plan, self._context, self._user_input)
+            issues = await self._cart_issues(plan) or await self._validator.check(
+                plan, self._context, self._user_input
+            )
         self._validations += 1
 
         source = issues[0].source if issues else ""
@@ -369,6 +383,21 @@ class SilpoFitAgent:
             )
             return []
         return issues
+
+    async def _cart_issues(self, plan: dict[str, Any]) -> list[Issue]:
+        if not self._apply or not self._cart_id:
+            return []
+        try:
+            text, is_error = await self._mcp.call_tool(
+                "silpo_get_shopping_cart_by_id", {"shoppingCartId": self._cart_id}
+            )
+        except Exception:
+            log.exception("cart cross-check failed to read the cart — skipping it")
+            return []
+        if is_error:
+            log.warning("cart cross-check skipped: %s", preview(text, 300))
+            return []
+        return check_cart_match(plan, text)
 
 
 def _text_of(parts: list[types.Part]) -> str:

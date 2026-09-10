@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 MEALS = ("breakfast", "lunch", "snack", "dinner")
 
 STORE_CONTEXT_TOOLS = ("silpo_get_shopping_cart_by_id",)
-PRODUCT_TOOLS = ("silpo_find_products_batch", "silpo_get_products", "silpo_get_product_details")
+PRODUCT_TOOLS = ("silpo_find_products_batch", "silpo_get_product_details")
 CART_WRITE_TOOLS = ("silpo_add_or_update_cart_products",)
 
 RATE_LIMIT_RETRIES = 2
@@ -89,6 +89,166 @@ class Review(BaseModel):
     issues: list[ReviewIssue] = Field(
         default_factory=list, description="Порушення, які треба виправити; порожньо, якщо ok"
     )
+
+
+def check_cart_match(plan: dict[str, Any], cart_json: str) -> list[Issue]:
+    try:
+        payload = json.loads(cart_json)
+    except ValueError:
+        log.warning("cart cross-check skipped: the cart payload is not JSON")
+        return []
+
+    products = _cart_products(payload)
+    calculation = _find_key(payload, "calculation") or {}
+    if not products and not calculation:
+        log.warning("cart cross-check skipped: no shipments and no calculation in the payload")
+        return []
+
+    issues: list[Issue] = []
+    _match_lines(issues, plan.get("cart") or [], products)
+    _match_totals(issues, plan.get("summary") or {}, calculation)
+    if issues:
+        log.warning(
+            "cart cross-check: %d mismatch(es) between the plan and the real cart", len(issues)
+        )
+    return issues
+
+
+def _match_lines(
+    issues: list[Issue], planned: list[dict[str, Any]], products: list[dict[str, Any]]
+) -> None:
+    if not products:
+        if planned:
+            issues.append(
+                Issue(
+                    "cart",
+                    f"справжній кошик порожній, а в плані {len(planned)} позицій — "
+                    "запис у кошик не відбувся",
+                    "додай товари через silpo_add_or_update_cart_products, перечитай кошик і "
+                    "перевір, що вони там справді зʼявились",
+                )
+            )
+        return
+    real = {str(item.get("productId") or ""): item for item in products}
+    real.pop("", None)
+    matched = [item for item in planned if str(item.get("product_id") or "") in real]
+
+    if planned and not matched:
+        issues.append(
+            Issue(
+                "cart",
+                f"жодна з {len(planned)} позицій плану не знайшлась у справжньому кошику, "
+                f"де зараз {len(real)} позицій — план описує не той кошик, який побачить користувач",
+                "додай саме ці товари через silpo_add_or_update_cart_products, перечитай кошик "
+                "і збери cart плану з того, що там реально лежить",
+            )
+        )
+        return
+
+    for item in planned:
+        name = str(item.get("name") or "?")
+        product = real.get(str(item.get("product_id") or ""))
+        if product is None:
+            issues.append(
+                Issue(
+                    "cart",
+                    f"«{name}» є в плані, але не в справжньому кошику",
+                    "додай товар у кошик або прибери його з плану — користувач отримає рівно "
+                    "те, що лежить у кошику",
+                )
+            )
+            continue
+        _match_line(issues, name, item, product)
+
+    planned_ids = {str(item.get("product_id") or "") for item in planned}
+    for product_id, product in real.items():
+        if product_id not in planned_ids:
+            issues.append(
+                Issue(
+                    "cart",
+                    f"у справжньому кошику лежить «{product.get('name') or product_id}», "
+                    "якого немає в плані — користувач за нього заплатить",
+                    "прибери зайвий товар через silpo_remove_cart_products або внеси його в план",
+                )
+            )
+
+
+def _match_line(
+    issues: list[Issue], name: str, item: dict[str, Any], product: dict[str, Any]
+) -> None:
+    planned_quantity = _num(item.get("quantity"))
+    real_quantity = _num(product.get("quantity"))
+    if abs(planned_quantity - real_quantity) > max(0.01, real_quantity * 0.01):
+        issues.append(
+            Issue(
+                "cart",
+                f"«{name}»: у плані {planned_quantity}, а в кошику {real_quantity}",
+                "постав у план ту саму кількість, що в кошику, або онови кошик — і перерахуй "
+                "порції в стравах під неї",
+            )
+        )
+
+    planned_total = _num(item.get("total_price"))
+    real_total = _num(product.get("total"))
+    if real_total and not _close(planned_total, real_total):
+        issues.append(
+            Issue(
+                "cart",
+                f"«{name}»: сума позиції в плані {planned_total} грн, у кошику {real_total} грн",
+                "скопіюй total позиції з кошика в total_price, а price — з поля price позиції",
+            )
+        )
+
+
+def _match_totals(
+    issues: list[Issue], summary: dict[str, Any], calculation: dict[str, Any]
+) -> None:
+    delivery = calculation.get("delivery")
+    real_delivery = _num(delivery.get("total")) if isinstance(delivery, dict) else 0.0
+    for field_name, real_value, label in (
+        ("products_total_uah", _num(calculation.get("productsTotal")), "calculation.productsTotal"),
+        (
+            "total_uah",
+            _num(calculation.get("totalAfterDiscounts")),
+            "calculation.totalAfterDiscounts",
+        ),
+        ("delivery_uah", real_delivery, "calculation.delivery.total"),
+    ):
+        if not real_value:
+            continue
+        planned = _num(summary.get(field_name))
+        if not _close(planned, real_value):
+            issues.append(
+                Issue(
+                    f"summary.{field_name}",
+                    f"у плані {planned} грн, а в справжньому кошику {real_value} грн",
+                    f"скопіюй {label} дослівно — фінальні гроші беруться лише з розрахунку кошика",
+                )
+            )
+
+
+def _cart_products(payload: Any) -> list[dict[str, Any]]:
+    shipments = _find_key(payload, "shipments")
+    if not isinstance(shipments, list):
+        return []
+    products: list[dict[str, Any]] = []
+    for shipment in shipments:
+        if isinstance(shipment, dict):
+            products += [p for p in (shipment.get("products") or []) if isinstance(p, dict)]
+    return products
+
+
+def _find_key(node: Any, key: str) -> Any:
+    queue = [node]
+    while queue:
+        current = queue.pop(0)
+        if isinstance(current, dict):
+            if key in current:
+                return current[key]
+            queue += list(current.values())
+        elif isinstance(current, list):
+            queue += current
+    return None
 
 
 def check_grounding(succeeded: set[str], plan: dict[str, Any], apply: bool) -> list[Issue]:

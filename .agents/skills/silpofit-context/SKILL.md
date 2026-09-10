@@ -170,6 +170,20 @@ nothing inside the plan was wrong. Neither the audit nor the review can see this
 class: they judge the artifact, and the artifact was fine. Only the run's own history
 knows the plan was never grounded, so the gate reads that instead.
 
+**Under `apply=true` the plan is checked against the real cart, not against itself.**
+`agent._cart_issues` re-reads `silpo_get_shopping_cart_by_id` (the id is captured from
+the model's own successful calls) and `validator.check_cart_match` compares line by
+line: quantity, line total, per-position presence in both directions, and
+`productsTotal` / `totalAfterDiscounts` / `delivery.total` against `summary`. This is
+the only check with access to ground truth. It exists because a plan can be perfectly
+self-consistent and still describe a different cart than the user will pay for — the
+observed case was a weight product where the model could not settle whether `quantity`
+meant 2.7 kg or 27 × 100 g, wrote the cart four times, and produced a plan whose
+`price × quantity` arithmetic checked out at ten times the real money. Nothing that
+reads only the plan can catch that. It fails open on anything unexpected — non-JSON,
+an error result, a payload with no `shipments` and no `calculation` — because a parse
+mismatch here would reject every plan forever.
+
 **The two kinds of rejection have separate budgets, on purpose.** `audit` issues
 get `SILPOFIT_VALIDATION_ROUNDS + AUDIT_EXTRA_ROUNDS` (3 + 2) attempts, `review`
 issues only `SILPOFIT_VALIDATION_ROUNDS`; the counters in `agent._rounds_used` are
@@ -229,8 +243,14 @@ objects from the API to the history, never rebuilt ones — Gemini 3 attaches a
 `thought_signature` to function-call parts and rejects the next request if it is
 missing.
 
-**The tool allowlist is deliberate.** Silpo MCP exposes ~45 tools;
-`tool_bridge.ALLOWED_TOOLS` hands the model ~24. More tools dilute tool choice and
+**The tool allowlist is deliberate.** Silpo MCP exposes ~40 tools;
+`tool_bridge.ALLOWED_TOOLS` hands the model 20 — every one of them named in the
+pipeline or needed to create a cart. Five that were not (`silpo_get_categories_tree`,
+`silpo_get_products`, `silpo_get_my_online_orders`, `silpo_get_my_offline_orders`,
+`silpo_get_my_premium_subscription`) were removed after a run where the model wandered
+into them mid-plan: `silpo_get_categories_tree` alone returned 62k characters and added
+28k tokens to every subsequent turn for nothing, since the products had already been
+found. A tool the pipeline never asks for is not a spare capability, it is a detour. More tools dilute tool choice and
 burn context — extend it only when the pipeline actually needs the tool, and add any
 cart-writing tool to `MUTATING_TOOLS` in the same edit.
 `silpo_create_shopping_cart` is the **one deliberate exception**: it is allowlisted

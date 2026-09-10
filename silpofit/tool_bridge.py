@@ -7,11 +7,8 @@ ALLOWED_TOOLS = (
     "silpo_get_my_profile",
     "silpo_get_my_food_restrictions",
     "silpo_get_my_favorites",
-    "silpo_get_my_premium_subscription",
     "silpo_find_products_batch",
-    "silpo_get_products",
     "silpo_get_product_details",
-    "silpo_get_categories_tree",
     "silpo_get_similar_products",
     "silpo_get_replacements",
     "silpo_get_promotions",
@@ -26,8 +23,6 @@ ALLOWED_TOOLS = (
     "silpo_add_or_update_cart_products",
     "silpo_remove_cart_products",
     "silpo_clear_shopping_cart",
-    "silpo_get_my_online_orders",
-    "silpo_get_my_offline_orders",
     "silpo_list_branches",
 )
 
