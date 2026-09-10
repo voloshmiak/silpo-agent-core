@@ -152,10 +152,19 @@ model re-add numbers — it will hallucinate a disagreement and the run will loo
 
 **The review fails open, and it gives up.** A review call that raises is logged
 and the plan is accepted — a quality gate must not turn a good run into a 502.
-After `SILPOFIT_VALIDATION_ROUNDS` (2) rejections the next plan is accepted with
-its issues unresolved, logged at ERROR and streamed as `validation` with
+After the round budget is spent the next plan is accepted with its issues
+unresolved, logged at ERROR and streamed as `validation` with
 `accepted: true, ok: false`. Both are better than a run that never terminates.
-Each round costs a model turn from `MAX_STEPS` plus ~7s of review.
+Each round costs a model turn from `MAX_STEPS` plus 15–30s of review.
+
+**The two kinds of rejection have separate budgets, on purpose.** `audit` issues
+get `SILPOFIT_VALIDATION_ROUNDS + AUDIT_EXTRA_ROUNDS` (3 + 2) attempts, `review`
+issues only `SILPOFIT_VALIDATION_ROUNDS`; the counters in `agent._rounds_used` are
+independent and the `validation` event carries the `source` that was rejected.
+This exists because of a real run: two content rounds burned the whole budget, the
+model then fixed the content and broke the money, and a one-line arithmetic error
+shipped with no attempts left. A deterministic issue is cheap to detect, always
+fixable without re-shopping, and must never be starved by the expensive review.
 
 **Two independent credentials.** The `Authorization: Bearer` header authenticates
 the *calling backend* (`SILPOFIT_SERVICE_TOKENS`, comma-separated). The *end user's*
@@ -198,9 +207,33 @@ objects from the API to the history, never rebuilt ones — Gemini 3 attaches a
 missing.
 
 **The tool allowlist is deliberate.** Silpo MCP exposes ~45 tools;
-`tool_bridge.ALLOWED_TOOLS` hands the model ~23. More tools dilute tool choice and
+`tool_bridge.ALLOWED_TOOLS` hands the model ~24. More tools dilute tool choice and
 burn context — extend it only when the pipeline actually needs the tool, and add any
 cart-writing tool to `MUTATING_TOOLS` in the same edit.
+`silpo_create_shopping_cart` is the **one deliberate exception**: it is allowlisted
+but *not* gated by `apply`. Without it a user whose cart is missing or stale has no
+recovery path, the model starts inventing `shoppingCartId`s (all-zero UUIDs,
+`a1b2c3d4-…` placeholders), every cart call fails with «Resource not found», and the
+plan ends up priced from search results instead of the cart. It is idempotent per
+user — with a cart already there it returns that same id and creates nothing — so in
+practice it fires only in the case it exists for. Know what it does cost: creating a
+cart also pins a delivery address, delivery type and timeslot on the account, which
+is more than "an empty cart". No products, no order, nothing charged, and the user can
+change all of it in the app; that is the trade this exception makes, and gating the
+tool is a one-line change if the call goes the other way.
+It needs a whole chain to be callable at all — `silpo_get_my_delivery_addresses`
+(coordinates) → `silpo_get_available_delivery_types` (`deliveryType` + `branchId`,
+falling back to `silpo_list_branches`) → `silpo_get_time_slots` → create. All four are
+allowlisted for exactly this reason; drop one and the model invents coordinates the
+same way it used to invent cart ids. The agent has no address of its own — nothing in
+`PlanRequest` carries one — so a user with no saved delivery address genuinely cannot
+have a cart created, and the prompt tells the model to fail loudly rather than guess.
+
+**A tool result flagged `isError` is a tool error.** `mcp_client.call_tool` returns
+`(text, is_error)` and the agent feeds it back as `{"error": …}`. Do not "simplify"
+this into returning the text alone: Silpo answers HTTP 200 with an error payload, and
+when that reaches the model labelled as a success it retries the same broken call with
+a different invented argument instead of changing course.
 
 **Arithmetic is a tool, not a model job.** `calc_targets`, `sum_macros`,
 `check_nutrition`, `check_budget` and `check_plan_days` exist so the numbers are
@@ -232,7 +265,7 @@ the user's Silpo token.
 | `SILPOFIT_SERVICE_TOKENS` | comma-separated backend tokens; empty ⇒ every `/plan` returns 500 |
 | `SILPOFIT_MODEL` | overrides `config.MODEL` (currently `gemini-3.5-flash-lite`) |
 | `SILPOFIT_THINKING_LEVEL` | `MINIMAL` < `LOW` < `MEDIUM` < `HIGH`; raise if plans degrade |
-| `SILPOFIT_VALIDATION_ROUNDS` | how many times the validator may send a plan back (default 2); `0` turns the review off |
+| `SILPOFIT_VALIDATION_ROUNDS` | how many times the reviewing model may send a plan back (default 3; deterministic audit issues get 2 more); `0` turns validation off |
 | `SILPOFIT_VALIDATOR_MODEL` | model for the review call; defaults to `SILPOFIT_MODEL` |
 | `SILPOFIT_VALIDATOR_THINKING_LEVEL` | thinking level for the review call; defaults to `SILPOFIT_THINKING_LEVEL` |
 | `SILPOFIT_LOG_LEVEL` | default `INFO` |

@@ -76,7 +76,7 @@ class SilpoMCP:
         log.info("Silpo MCP exposes %d tools", len(tools))
         return tools
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
         started = time.monotonic()
         try:
             result = await self.client.call_tool(name, arguments)
@@ -87,7 +87,7 @@ class SilpoMCP:
         if result.is_error:
             log.warning("MCP %s returned an error result: %s", name, preview(text, 600))
         log.debug("MCP %s: %.0fms, %d chars", name, (time.monotonic() - started) * 1000, len(text))
-        return text
+        return text, bool(result.is_error)
 
 
 def _flatten(result: CallToolResult) -> str:

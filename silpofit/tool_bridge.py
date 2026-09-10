@@ -19,6 +19,8 @@ ALLOWED_TOOLS = (
     "silpo_get_my_coupons",
     "silpo_get_my_shopping_cart",
     "silpo_get_shopping_cart_by_id",
+    "silpo_create_shopping_cart",
+    "silpo_get_my_delivery_addresses",
     "silpo_get_available_delivery_types",
     "silpo_get_time_slots",
     "silpo_add_or_update_cart_products",

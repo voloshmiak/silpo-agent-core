@@ -7,7 +7,7 @@ MCP_URL = "https://mcp.silpo.ua/mcp"
 MODEL = "gemini-3.5-flash-lite"
 THINKING_LEVEL = "MEDIUM"
 MAX_STEPS = 75
-VALIDATION_ROUNDS = 2
+VALIDATION_ROUNDS = 3
 VALIDATION_MODEL = "gemini-3.8-flash"
 
 @dataclass

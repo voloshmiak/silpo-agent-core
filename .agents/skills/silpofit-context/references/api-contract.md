@@ -34,7 +34,7 @@ One JSON object per `data:` line, every frame stamped with `run_id`:
 ```
 data: {"type":"tool_call","tool":"silpo_find_products_batch","args":{…},"run_id":"9f2c1ab4"}
 data: {"type":"tool_result","tool":"silpo_find_products_batch","ok":true,"result":"…","run_id":"9f2c1ab4"}
-data: {"type":"validation","ok":false,"round":1,"accepted":false,"issues":[{"where":"summary.total_uah","problem":"…","fix":"…","source":"audit"}],"run_id":"9f2c1ab4"}
+data: {"type":"validation","ok":false,"round":1,"source":"audit","accepted":false,"issues":[{"where":"summary.total_uah","problem":"…","fix":"…","source":"audit"}],"run_id":"9f2c1ab4"}
 data: {"type":"plan","plan":{…},"run_id":"9f2c1ab4"}
 ```
 
@@ -42,9 +42,11 @@ data: {"type":"plan","plan":{…},"run_id":"9f2c1ab4"}
 * `validation` — one frame per review of a finished plan, right after the
   `finalize_plan` tool result. `ok: false` with `accepted: false` means the plan
   went back to the agent to be fixed and the run continues; `accepted: true`
-  with `ok: false` means the review rounds ran out and the plan was let through
-  with those issues unresolved. `source` is `audit` (deterministic check) or
-  `review` (the reviewing model). Progress only — the backend never needs to act
+  with `ok: false` means that kind of rejection ran out of rounds and the plan was
+  let through with those issues unresolved. `source` is `audit` (deterministic
+  check) or `review` (the reviewing model), and the two have separate round
+  budgets, so `round` counts every validation while the budget that ran out is the
+  one named in `source`. Progress only — the backend never needs to act
   on it, but it is the honest place to show «перевіряю план» in the UI.
 * Terminal frame is **always** `plan` or `error`. A stream that ends with neither
   means the connection dropped — that is the one failure the server cannot report.

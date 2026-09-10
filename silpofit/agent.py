@@ -25,6 +25,8 @@ DRY_RUN_REFUSAL = (
 
 MAX_RATE_LIMIT_RETRIES = 5
 
+AUDIT_EXTRA_ROUNDS = 2
+
 
 @dataclass
 class AgentResult:
@@ -51,7 +53,8 @@ class SilpoFitAgent:
         self._validator = PlanValidator(self._genai, settings)
         self._context = PlanContext()
         self._user_input = ""
-        self._validation_round = 0
+        self._validations = 0
+        self._rounds_used: dict[str, int] = {"audit": 0, "review": 0}
         self._pending: list[dict[str, Any]] = []
 
     async def prepare(self) -> None:
@@ -100,7 +103,8 @@ class SilpoFitAgent:
         self._captured_plan = None
         self._context = context or PlanContext()
         self._user_input = user_input
-        self._validation_round = 0
+        self._validations = 0
+        self._rounds_used = {"audit": 0, "review": 0}
         self._pending = []
 
         system_instruction = prompts.SYSTEM_INSTRUCTION
@@ -286,7 +290,7 @@ class SilpoFitAgent:
             return DRY_RUN_REFUSAL, True
         try:
             if name in self._mcp_tool_names:
-                return await self._mcp.call_tool(name, arguments), False
+                return await self._mcp.call_tool(name, arguments)
             handler = self._local.get(name)
             if handler is None:
                 log.error("model called an unknown tool: %s", name)
@@ -319,27 +323,35 @@ class SilpoFitAgent:
         return "recorded"
 
     async def _validate(self, plan: dict[str, Any]) -> list[Issue]:
-        rounds = self._settings.validation_rounds
-        if rounds <= 0:
+        limit = self._settings.validation_rounds
+        if limit <= 0:
             return []
 
-        self._validation_round += 1
         issues = await self._validator.check(plan, self._context, self._user_input)
-        exhausted = bool(issues) and self._validation_round > rounds
+        self._validations += 1
+
+        source = issues[0].source if issues else ""
+        if issues:
+            self._rounds_used[source] += 1
+        allowed = limit + AUDIT_EXTRA_ROUNDS if source == "audit" else limit
+        exhausted = bool(issues) and self._rounds_used.get(source, 0) > allowed
+
         self._pending.append(
             _event(
                 "validation",
                 ok=not issues,
-                round=self._validation_round,
+                round=self._validations,
+                source=source,
                 accepted=not issues or exhausted,
                 issues=[issue.as_dict() for issue in issues],
             )
         )
         if exhausted:
             log.error(
-                "plan accepted with %d unresolved issue(s) after %d validation round(s): %s",
+                "plan accepted with %d unresolved %s issue(s) after %d round(s) of that kind: %s",
                 len(issues),
-                rounds,
+                source,
+                allowed,
                 preview(format_issues(issues), 1500),
             )
             return []
