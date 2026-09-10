@@ -1,7 +1,10 @@
+import logging
 from typing import Any
 
 from google.genai import types
 from mcp.types import Tool
+
+log = logging.getLogger(__name__)
 
 ALLOWED_TOOLS = (
     "silpo_get_my_profile",
@@ -34,6 +37,32 @@ MUTATING_TOOLS = frozenset(
         "silpo_update_shopping_cart",
     }
 )
+
+SEARCH_TOOL = "silpo_find_products_batch"
+SEARCH_LIMIT_DEFAULT = 6
+SEARCH_LIMIT_MAX = 12
+
+
+def normalize_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name != SEARCH_TOOL:
+        return arguments
+    requested = arguments.get("limit")
+    limit = (
+        min(int(requested), SEARCH_LIMIT_MAX)
+        if isinstance(requested, (int, float)) and requested > 0
+        else SEARCH_LIMIT_DEFAULT
+    )
+    if limit == requested:
+        return arguments
+    log.info(
+        "%s: limit %s -> %d over %d queries",
+        name,
+        requested if requested is not None else "unset (Silpo defaults to 30)",
+        limit,
+        len(arguments.get("products") or []),
+    )
+    return {**arguments, "limit": limit}
+
 
 _SCHEMA_FIELDS = ("items", "additionalProperties")
 _SCHEMA_LIST_FIELDS = ("anyOf", "oneOf")

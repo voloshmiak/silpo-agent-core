@@ -13,7 +13,7 @@ from . import finalize, local_tools, prompts
 from .config import Settings
 from .logs import preview
 from .mcp_client import SilpoMCP
-from .tool_bridge import MUTATING_TOOLS, select_tools
+from .tool_bridge import MUTATING_TOOLS, normalize_arguments, select_tools
 from .validator import (
     Issue,
     PlanContext,
@@ -307,7 +307,7 @@ class SilpoFitAgent:
             return DRY_RUN_REFUSAL, True
         try:
             if name in self._mcp_tool_names:
-                return await self._mcp.call_tool(name, arguments)
+                return await self._mcp.call_tool(name, normalize_arguments(name, arguments))
             handler = self._local.get(name)
             if handler is None:
                 log.error("model called an unknown tool: %s", name)

@@ -175,12 +175,14 @@ knows the plan was never grounded, so the gate reads that instead.
 the model's own successful calls) and `validator.check_cart_match` compares line by
 line: quantity, line total, per-position presence in both directions, and
 `productsTotal` / `totalAfterDiscounts` / `delivery.total` against `summary`. This is
-the only check with access to ground truth. It exists because a plan can be perfectly
-self-consistent and still describe a different cart than the user will pay for — the
-observed case was a weight product where the model could not settle whether `quantity`
-meant 2.7 kg or 27 × 100 g, wrote the cart four times, and produced a plan whose
-`price × quantity` arithmetic checked out at ten times the real money. Nothing that
-reads only the plan can catch that. It fails open on anything unexpected — non-JSON,
+the only check with access to ground truth, and it is the only one that can settle a
+disagreement — a plan can be perfectly self-consistent and still describe a different
+cart than the user will pay for. The observed case: the model oscillated between
+`quantity: 27` and `quantity: 2.7` for a weighted product across four cart writes, and
+the reviewing model "diagnosed" it as 27 × 100 g — **wrongly**, as the cart payload
+later proved. That is precisely why the reviewer must never be the authority on
+numbers: it argued confidently for the wrong answer, and only the cart could say who
+was right. Nothing that reads only the plan can catch this class. It fails open on anything unexpected — non-JSON,
 an error result, a payload with no `shipments` and no `calculation` — because a parse
 mismatch here would reject every plan forever.
 
@@ -223,6 +225,25 @@ Without them product search silently returns **zero results** — which reads li
 against `IMAGE_HOST`. The product page URL is *derived* from the slug, never written
 by the model. `total_price` is cross-checked against `price × quantity` to catch a
 unit price used as a line total.
+
+**A weighted product's `quantity` is always in kilograms** — `weighted: true` decides
+it, never the label. Silpo returns `displayRatio`/`ratio` as display context only:
+«Куряче філе домашнє» comes back as `ratio: "100г"`, `weighted: true`, `quantity: 2.6`,
+`price: 308.58`, `total: 802.31` — that is 2.6 **kg** at 308.58/kg, not 260 g. For
+`weighted: false` the quantity counts packages and `displayRatio` («500г», «10шт»,
+«5*80г») says what one contains. Both the prompt and any future check must use
+`weighted`, not the string, or they will be confidently wrong in units of ten.
+
+**Product search is capped to a few results per query.** `silpo_find_products_batch`
+defaults to **30 matches per search term** and the model never passes `limit`, so a
+nine-term batch came back with 270 products — 105,883 characters, +28k tokens on every
+later turn, for a pipeline that needs a handful of candidates.
+`tool_bridge.normalize_arguments` forces `limit` to 6 (and caps an explicit request at
+12) before the call leaves the agent. Field-trimming the payload was considered and
+rejected: at ~392 characters per product almost every field is load-bearing —
+`id`/`companyId`/`branchId` for cart writes, `slug`/`image` for schema validation,
+`weighted`/`step`/`displayRatio` for quantities, `specialPrices` for promotions. The
+count was the problem, not the shape.
 
 **`Plan.cart` has a floor of 3 items**, and the floor is declared in the schema, not
 only enforced after the fact. A week's ration cannot come from two products, and an
