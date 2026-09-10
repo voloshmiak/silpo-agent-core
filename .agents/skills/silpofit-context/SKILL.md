@@ -219,6 +219,19 @@ model then fixed the content and broke the money, and a one-line arithmetic erro
 shipped with no attempts left. A deterministic issue is cheap to detect, always
 fixable without re-shopping, and must never be starved by the expensive review.
 
+**History reaches the agent as a digest, never as last week's plan.** `previous_feedback`
+(`WeekFeedback` in `request_schema`) is the channel the backend should fill: what was
+spent, how the weight moved, a per-product verdict (`liked` / `disliked` / `leftover` /
+`missing`) and per-dish ratings. `previous_plan` is still accepted but never rendered
+raw — `prompts._previous_plan_digest` reduces it to cart names, unique dish titles and
+the spend, which works because it is our own `Plan` shape. The raw field pushed prompts
+to 168k–241k characters (≈91k–125k tokens **before the first model turn**) and did
+active harm: runs kept opening with last week's cart copied verbatim into
+`finalize_plan`, which is why `check_grounding` had to exist at all. Both renderings end
+on the same sentence — a hint about taste, not a source of products or prices — and both
+stay near 700 characters, because their size follows the number of items, not the
+verbosity of the archive.
+
 **`note` carries requests, not decoration.** The user's free text is the only channel
 for "I like marshmallows" or "no fish on Fridays", and a run shipped ignoring exactly
 such a line. `build_plan_prompt` now marks it as instructions to honour, and the

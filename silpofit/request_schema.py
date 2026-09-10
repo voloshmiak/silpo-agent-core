@@ -6,6 +6,7 @@ Sex = Literal["male", "female"]
 Goal = Literal["lose", "maintain", "gain"]
 DietType = Literal["none", "vegetarian", "vegan", "keto", "paleo", "low_fodmap"]
 PromoPriority = Literal["low", "medium", "high"]
+Verdict = Literal["liked", "disliked", "leftover", "missing"]
 
 SEX_ALIASES: dict[str, str] = {
     "male": "male",
@@ -99,6 +100,27 @@ DAY_ALIASES: dict[str, str] = {
     for alias in aliases
 }
 
+VERDICT_ALIASES: dict[str, str] = {
+    "liked": "liked",
+    "сподобалось": "liked",
+    "сподобався": "liked",
+    "смакувало": "liked",
+    "подобається": "liked",
+    "disliked": "disliked",
+    "не сподобалось": "disliked",
+    "не сподобався": "disliked",
+    "не смакувало": "disliked",
+    "leftover": "leftover",
+    "залишилось": "leftover",
+    "лишилось": "leftover",
+    "не зʼїли": "leftover",
+    "не з'їли": "leftover",
+    "missing": "missing",
+    "не вистачило": "missing",
+    "забракло": "missing",
+    "мало": "missing",
+}
+
 MAX_WEEKLY_PACE_KG = 2.0
 
 
@@ -130,6 +152,38 @@ class Profile(BaseModel):
     @classmethod
     def _normalize_sex(cls, value: Any) -> Any:
         return _normalize(value, SEX_ALIASES, "sex")
+
+
+class ProductFeedback(BaseModel):
+    name: str = Field(description="Назва товару, як у «Сільпо»")
+    slug: str = Field("", description="Slug товару, якщо бекенд його зберіг")
+    verdict: Verdict = Field(
+        "liked",
+        description=(
+            "liked — брати знову; disliked — не брати; leftover — лишилось, брати менше; "
+            "missing — не вистачило, брати більше. Приймає «сподобалось», «залишилось»…"
+        ),
+    )
+    note: str = ""
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _normalize_verdict(cls, value: Any) -> Any:
+        return _normalize(value, VERDICT_ALIASES, "verdict") or "liked"
+
+
+class DishFeedback(BaseModel):
+    title: str = Field(description="Назва страви з минулого плану")
+    rating: int = Field(0, ge=0, le=5, description="Оцінка 1-5; 0 — не оцінювали")
+    note: str = Field("", description="«занадто складно готувати», «набридло»…")
+
+
+class WeekFeedback(BaseModel):
+    spent_uah: float = Field(0.0, description="Скільки реально витрачено минулого тижня")
+    weight_change_kg: float = Field(0.0, description="Зміна ваги за тиждень, + або −")
+    products: list[ProductFeedback] = Field(default_factory=list)
+    dishes: list[DishFeedback] = Field(default_factory=list)
+    note: str = Field("", description="Вільний підсумок тижня від бекенда")
 
 
 class PlanRequest(BaseModel):
@@ -171,7 +225,22 @@ class PlanRequest(BaseModel):
     fridge_items: list[str] = Field(default_factory=list)
 
     note: str = Field("", description="The user's own free text, nothing folded in")
-    previous_plan: dict[str, Any] | None = None
+    previous_feedback: WeekFeedback | None = Field(
+        None,
+        description=(
+            "Стислий підсумок минулого тижня: що куповано і як зайшло. Замінює "
+            "`previous_plan` — надсилай саме його, воно на два порядки менше."
+        ),
+    )
+    previous_plan: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Минулий план цілком. DEPRECATED: у промпт іде лише стисла вижимка з нього "
+            "(товари, страви, витрати), бо повний JSON роздував контекст до 125k токенів "
+            "і провокував модель переписати минулий кошик замість пошуку. Ігнорується, "
+            "якщо задано `previous_feedback`."
+        ),
+    )
     apply: bool = False
 
     @field_validator("goal", mode="before")

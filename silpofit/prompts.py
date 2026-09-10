@@ -1,8 +1,10 @@
-import json
+import logging
 from typing import Any
 
 from .plan_schema import DAYS
-from .request_schema import DietType, Goal, PromoPriority, Sex
+from .request_schema import DietType, Goal, PromoPriority, Sex, WeekFeedback
+
+log = logging.getLogger(__name__)
 
 SYSTEM_INSTRUCTION = """\
 Ти — SilpoFit, агент персонального харчування. Ти не даєш загальних порад на кшталт
@@ -52,8 +54,10 @@ SYSTEM_INSTRUCTION = """\
    +10% і -7.5%, при 5 тренуваннях — приблизно +4% і -10%. Не роби тренувальний день
    на 15-20% вище норми: кожен окремий день перевіряється проти неї. Якщо в повідомленні є розклад тренувань — привʼяжи це саме до
    названих днів і постав їм workout: true, а решті днів workout: false; без розкладу
-   розстав тренувальні дні сам, рівномірно. Якщо в повідомленні є минулий план —
-   врахуй, що з нього реально купувалось, і адаптуй новий раціон відповідно.
+   розстав тренувальні дні сам, рівномірно. Якщо в повідомленні є підсумок
+   минулого тижня — це головна підказка: повтори страви й товари, що сподобались,
+   прибери те, що не зайшло, і зменш те, що лишилось у холодильнику. Товари з нього
+   однаково шукай заново — це список смаків, а не готовий кошик.
 5. НАЯВНЕ. Відніми продукти, які користувач назвав наявними. Те, що вже є, не купуємо.
 6. ТОВАРИ. Знайди реальні товари через silpo_find_products_batch — одним викликом на
    групу продуктів, не по одному. Продукти з побажань користувача шукай у першому ж
@@ -258,6 +262,15 @@ PROMO_RULES: dict[str, str] = {
     ),
 }
 
+VERDICT_LABELS: dict[str, str] = {
+    "liked": "смакувало, можна брати знову",
+    "disliked": "не сподобалось, не брати",
+    "leftover": "лишилось у холодильнику, брати менше",
+    "missing": "не вистачило, брати більше",
+}
+
+MEAL_KEYS = ("breakfast", "lunch", "snack", "dinner")
+
 WEEKDAY_LABELS: dict[str, str] = {
     "monday": "понеділок",
     "tuesday": "вівторок",
@@ -289,6 +302,7 @@ def build_plan_prompt(
     fridge_items: list[str] | None = None,
     note: str = "",
     previous_plan: dict[str, Any] | None = None,
+    previous_feedback: WeekFeedback | None = None,
 ) -> str:
     goal = goal or goal_from_weights(weight_kg, target_weight_kg)
     lines = [
@@ -363,11 +377,81 @@ def build_plan_prompt(
             "тоді напиши в summary.notes, яке саме і чому. «Не вистачило бюджету» "
             "поясненням не є: бюджет розподіляєш ти, і побажання йде в нього першим."
         )
-    if previous_plan:
-        lines.append("Минулий тижневий план (JSON, від бекенда):")
-        lines.append(json.dumps(previous_plan, ensure_ascii=False))
+    if previous_feedback:
+        lines += _feedback_lines(previous_feedback)
+    elif previous_plan:
+        lines += _previous_plan_digest(previous_plan)
     lines.append("Склади раціон на тиждень і збери кошик.")
     return "\n".join(lines)
+
+
+def _feedback_lines(feedback: WeekFeedback) -> list[str]:
+    lines = ["Минулий тиждень — що справді сталося (спирайся на це, а не на здогади):"]
+    head = []
+    if feedback.spent_uah:
+        head.append(f"витрачено {feedback.spent_uah} грн")
+    if feedback.weight_change_kg:
+        head.append(f"зміна ваги {feedback.weight_change_kg:+g} кг")
+    if head:
+        lines.append("- " + ", ".join(head) + ".")
+
+    for verdict, label in VERDICT_LABELS.items():
+        named = [
+            product.name + (f" ({product.note})" if product.note else "")
+            for product in feedback.products
+            if product.verdict == verdict and product.name
+        ]
+        if named:
+            lines.append(f"- {label}: {'; '.join(named)}.")
+
+    rated = [dish for dish in feedback.dishes if dish.title and (dish.rating or dish.note)]
+    if rated:
+        listed = "; ".join(
+            f"«{dish.title}»"
+            + (f" {dish.rating}/5" if dish.rating else "")
+            + (f" — {dish.note}" if dish.note else "")
+            for dish in rated
+        )
+        lines.append(f"- Страви: {listed}.")
+    if feedback.note:
+        lines.append(f"- {feedback.note}")
+
+    lines.append(
+        "Повтори те, що зайшло, прибери те, що не зайшло, і не бери повторно того, що "
+        "лишилось. Товари однаково шукай заново — ціни й наявність змінились."
+    )
+    return lines
+
+
+def _previous_plan_digest(plan: dict[str, Any]) -> list[str]:
+    cart = [str(item.get("name") or "").strip() for item in (plan.get("cart") or [])]
+    cart = [name for name in cart if name]
+
+    titles: list[str] = []
+    for day in plan.get("days") or []:
+        for key in MEAL_KEYS:
+            title = str((day.get(key) or {}).get("title") or "").strip()
+            if title and title not in titles:
+                titles.append(title)
+
+    if not cart and not titles:
+        log.warning("previous_plan has no cart and no dishes — leaving it out of the prompt")
+        return []
+
+    lines = ["Минулого тижня (стисла вижимка з архіву, не джерело товарів і цін):"]
+    if cart:
+        lines.append(f"- Купували: {', '.join(cart)}.")
+    if titles:
+        lines.append(f"- Готували: {'; '.join(titles)}.")
+    spent = (plan.get("summary") or {}).get("total_uah")
+    if spent:
+        lines.append(f"- Витратили {spent} грн.")
+    lines.append(
+        "Це підказка про смаки, а не готовий кошик: кожен товар шукай заново через "
+        "silpo_find_products_batch, ціни й наявність за тиждень змінились."
+    )
+    log.info("previous_plan digested to %d products and %d dishes", len(cart), len(titles))
+    return lines
 
 
 def goal_from_weights(weight_kg: float, target_weight_kg: float) -> Goal:

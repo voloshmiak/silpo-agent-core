@@ -112,6 +112,7 @@ def _plan_prompt(body: PlanRequest) -> str:
         fridge_items=body.fridge_items,
         note=body.note,
         previous_plan=body.previous_plan,
+        previous_feedback=body.previous_feedback,
     )
 
 

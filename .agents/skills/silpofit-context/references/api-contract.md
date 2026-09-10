@@ -88,8 +88,9 @@ data: {"type":"plan","plan":{…},"run_id":"9f2c1ab4"}
 | `allergens` | list[str] | `[]` | hard ban, including hidden sources in the composition |
 | `excluded_products` | list[str] | `[]` | stop-products |
 | `fridge_items` | list[str] | `[]` | already at home — subtracted from the shopping list |
-| `note` | str | `""` | the user's own free text, passed through verbatim. **This is where end-of-week dish feedback arrives** |
-| `previous_plan` | object | `null` | last week's `Plan` JSON. **This is the whole adaptation channel** — the agent weighs what was actually bought |
+| `note` | str | `""` | the user's own free text, passed through verbatim. A wish here is planned in *first*, before the budget is spent, and the reviewer rejects a budget excuse for dropping it |
+| `previous_feedback` | `WeekFeedback` | `null` | **the adaptation channel — send this one.** `spent_uah`, `weight_change_kg`, `products[]` (`name`, `slug`, `verdict`, `note`), `dishes[]` (`title`, `rating` 0-5, `note`), `note`. `verdict` is `liked` / `disliked` / `leftover` / `missing` and accepts «сподобалось», «залишилось», «не вистачило»… |
+| `previous_plan` | object | `null` | **deprecated.** Still accepted, but only a digest (cart names, dish titles, spend) reaches the prompt — the full JSON grew past 240k characters, dominated the context and taught the model to copy last week's cart instead of searching. Ignored entirely when `previous_feedback` is set |
 | `apply` | bool | `false` | `true` writes the real Silpo cart; `false` plans it only |
 
 **Normalization rules.** Enum-like values are matched casefolded with collapsed
