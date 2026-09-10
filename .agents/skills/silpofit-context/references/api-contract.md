@@ -32,12 +32,19 @@ user's Silpo token.
 One JSON object per `data:` line, every frame stamped with `run_id`:
 
 ```
+data: {"type":"start","apply":true,"run_id":"9f2c1ab4"}
 data: {"type":"tool_call","tool":"silpo_find_products_batch","args":{…},"run_id":"9f2c1ab4"}
 data: {"type":"tool_result","tool":"silpo_find_products_batch","ok":true,"result":"…","run_id":"9f2c1ab4"}
 data: {"type":"validation","ok":false,"round":1,"source":"audit","accepted":false,"issues":[{"where":"summary.total_uah","problem":"…","fix":"…","source":"audit"}],"run_id":"9f2c1ab4"}
 data: {"type":"plan","plan":{…},"run_id":"9f2c1ab4"}
 ```
 
+* `start` — sent before any work begins, so response headers reach the caller in
+  milliseconds instead of after the MCP handshake and the first model turn. It also
+  carries the `run_id` up front, which is otherwise only learnable from the first
+  `tool_call`. Do not remove it: without a first byte, an HTTP client with a
+  response-header timeout (Go's `Transport.ResponseHeaderTimeout`, for one) gives up
+  before the run has produced anything.
 * `tool_call` / `tool_result` — progress only; `result` is truncated to 200 chars.
 * `validation` — one frame per review of a finished plan, right after the
   `finalize_plan` tool result. `ok: false` with `accepted: false` means the plan
@@ -54,6 +61,11 @@ data: {"type":"plan","plan":{…},"run_id":"9f2c1ab4"}
   and the model's trailing `text` when the run stopped short of `finalize_plan`.
 * HTTP status is already 200 by the time a run can fail here, so failures are
   `error` events, not error statuses.
+* **Client timeouts.** A whole run is 60–180 s, and frames are not evenly spaced: the
+  longest silences are the first model turn (up to ~20 s) and `finalize_plan`, whose
+  tool call covers the plan review (15–44 s observed). A client idle/read timeout below
+  ~60 s will cut healthy runs. `POST /plan` streams nothing at all, so its client
+  timeout must exceed the entire run.
 
 ## Request — `PlanRequest`
 

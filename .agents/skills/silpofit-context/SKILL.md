@@ -198,6 +198,18 @@ which broke the sum check, and shipped 2650 kcal against a 2272 target with the 
 spent. Two individually correct checks can still spell out contradictory instructions —
 whenever two checks constrain the same number, one of them must own the fix.
 
+**The training-day spread has a band, and both checkers must agree on it.** The audit
+holds every day within ±12% of `targets.kcal`; the reviewer requires workout days to
+carry more carbs and protein than rest days. Stated without a magnitude, those two
+sent a run in circles: the model pushed workout days to +14%, the audit rejected them,
+the model flattened the week, the reviewer demanded differentiation again. Neither
+check was wrong — the model simply had no idea a solution existed inside the band. So
+`SYSTEM_INSTRUCTION` now gives the arithmetic (≈+10%/−7.5% at three workouts,
+≈+4%/−10% at five, always averaging to the norm over the week) and the reviewer's rule
+5 owns only the *direction* of the spread, never its size. When two checkers constrain
+the same quantity, one of them must state the feasible range, or the model will
+oscillate between them until the rounds run out.
+
 **The two kinds of rejection have separate budgets, on purpose.** `audit` issues
 get `SILPOFIT_VALIDATION_ROUNDS + AUDIT_EXTRA_ROUNDS` (3 + 2) attempts, `review`
 issues only `SILPOFIT_VALIDATION_ROUNDS`; the counters in `agent._rounds_used` are

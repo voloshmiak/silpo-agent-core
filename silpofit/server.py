@@ -76,11 +76,11 @@ async def plan(body: PlanRequest) -> Plan:
 
 @app.post("/plan/stream", dependencies=[Depends(require_service_token)])
 async def plan_stream(body: PlanRequest) -> StreamingResponse:
-    """SSE: `tool_call`/`tool_result` events while the agent is calling MCP
-    tools, a `validation` event every time the plan is reviewed, then one
-    terminal `plan` event carrying the same JSON object that `POST /plan`
-    returns (or `error` if the run fails). No prose is streamed — the plan is
-    the answer."""
+    """SSE: an immediate `start` frame carrying the `run_id`, then
+    `tool_call`/`tool_result` events while the agent is calling MCP tools, a
+    `validation` event every time the plan is reviewed, then one terminal
+    `plan` event carrying the same JSON object that `POST /plan` returns (or
+    `error` if the run fails). No prose is streamed — the plan is the answer."""
     return StreamingResponse(
         _sse(
             body.silpo_access_token,
@@ -142,6 +142,9 @@ async def _sse(
     started = time.monotonic()
     counts: dict[str, int] = {}
     terminal: str | None = None
+
+    yield _frame({"type": "start", "apply": apply}, run_id)
+
     try:
         async with SilpoMCP(settings.mcp_url, access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
