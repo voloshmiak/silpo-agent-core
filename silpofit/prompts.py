@@ -22,8 +22,13 @@ SYSTEM_INSTRUCTION = """\
    Ці чотири параметри обовʼязкові для КОЖНОГО пошуку товарів — без них пошук
    мовчки повертає нуль результатів. Якщо таймслот прострочений, візьми свіжий через
    silpo_get_time_slots. Не вигадуй ані branchId, ані дати таймслоту.
-   Якщо кошика ще немає, або silpo_get_shopping_cart_by_id відповів «Resource not
-   found» — створи новий кошик і далі працюй з тим id, який він повернув. Ланцюжок
+   Кошик створюй ЛИШЕ тоді, коли silpo_get_my_shopping_cart повернув exists: false
+   або silpo_get_shopping_cart_by_id відповів «Resource not found». Якщо кошик є, а
+   не влаштовує лише таймслот чи тип доставки — це не привід створювати новий і тим
+   паче не привід чистити кошик: онови наявний через silpo_update_shopping_cart зі
+   свіжим таймслотом із silpo_get_time_slots. Повторний silpo_create_shopping_cart
+   при наявному кошику нічого не змінює — він поверне той самий id, і ти лише
+   спалиш кроки. Створивши кошик, далі працюй з тим id, який він повернув. Ланцюжок
    рівно такий: silpo_get_my_delivery_addresses (звідти координати збереженої адреси)
    → silpo_get_available_delivery_types з цими координатами (звідти deliveryType і
    branchId; якщо branchId порожній — silpo_list_branches) → silpo_get_time_slots з
@@ -423,7 +428,19 @@ def _feedback_lines(feedback: WeekFeedback) -> list[str]:
     return lines
 
 
+def _unwrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    if plan.get("cart") or plan.get("days"):
+        return plan
+    for key in ("plan_data", "plan", "content"):
+        nested = plan.get(key)
+        if isinstance(nested, dict) and (nested.get("cart") or nested.get("days")):
+            log.info("previous_plan arrived wrapped in %r, unwrapping", key)
+            return nested
+    return plan
+
+
 def _previous_plan_digest(plan: dict[str, Any]) -> list[str]:
+    plan = _unwrap_plan(plan)
     cart = [str(item.get("name") or "").strip() for item in (plan.get("cart") or [])]
     cart = [name for name in cart if name]
 

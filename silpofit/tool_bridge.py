@@ -20,12 +20,12 @@ ALLOWED_TOOLS = (
     "silpo_get_my_shopping_cart",
     "silpo_get_shopping_cart_by_id",
     "silpo_create_shopping_cart",
+    "silpo_update_shopping_cart",
     "silpo_get_my_delivery_addresses",
     "silpo_get_available_delivery_types",
     "silpo_get_time_slots",
     "silpo_add_or_update_cart_products",
     "silpo_remove_cart_products",
-    "silpo_clear_shopping_cart",
     "silpo_list_branches",
 )
 
@@ -40,7 +40,7 @@ MUTATING_TOOLS = frozenset(
 
 SEARCH_TOOL = "silpo_find_products_batch"
 SEARCH_LIMIT_DEFAULT = 6
-SEARCH_LIMIT_MAX = 12
+SEARCH_LIMIT_MAX = 8
 
 
 def normalize_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
