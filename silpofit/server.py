@@ -66,12 +66,7 @@ async def health() -> dict[str, str]:
 @app.post("/plan", dependencies=[Depends(require_service_token)], response_model=Plan)
 async def plan(body: PlanRequest) -> Plan:
     """The finished weekly plan: targets, seven days of meals, cart, summary."""
-    return await _run(
-        body.silpo_access_token,
-        _plan_prompt(body),
-        apply=body.apply,
-        context=PlanContext.from_request(body),
-    )
+    return await _run(body)
 
 
 @app.post("/plan/stream", dependencies=[Depends(require_service_token)])
@@ -81,15 +76,7 @@ async def plan_stream(body: PlanRequest) -> StreamingResponse:
     `validation` event every time the plan is reviewed, then one terminal
     `plan` event carrying the same JSON object that `POST /plan` returns (or
     `error` if the run fails). No prose is streamed — the plan is the answer."""
-    return StreamingResponse(
-        _sse(
-            body.silpo_access_token,
-            _plan_prompt(body),
-            apply=body.apply,
-            context=PlanContext.from_request(body),
-        ),
-        media_type="text/event-stream",
-    )
+    return StreamingResponse(_sse(body), media_type="text/event-stream")
 
 
 def _plan_prompt(body: PlanRequest) -> str:
@@ -116,15 +103,18 @@ def _plan_prompt(body: PlanRequest) -> str:
     )
 
 
-async def _run(access_token: str, prompt: str, *, apply: bool, context: PlanContext) -> Plan:
+async def _run(body: PlanRequest) -> Plan:
     run_id = logs.new_run_id()
-    log.info("POST /plan (apply=%s, prompt=%d chars)", apply, len(prompt))
+    prompt = _plan_prompt(body)
+    log.info("POST /plan: %s", _request_summary(body, prompt))
     started = time.monotonic()
     try:
-        async with SilpoMCP(settings.mcp_url, access_token) as mcp:
+        async with SilpoMCP(settings.mcp_url, body.silpo_access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
             await agent.prepare()
-            result: AgentResult = await agent.run(prompt, apply=apply, context=context)
+            result: AgentResult = await agent.run(
+                prompt, apply=body.apply, context=PlanContext.from_request(body)
+            )
     except SilpoTokenExpired as exc:
         log.warning("POST /plan → 409 silpo_token_expired after %.1fs", time.monotonic() - started)
         raise HTTPException(409, {"code": "silpo_token_expired", "message": str(exc)}) from exc
@@ -135,22 +125,23 @@ async def _run(access_token: str, prompt: str, *, apply: bool, context: PlanCont
     return Plan.model_validate(result.plan)
 
 
-async def _sse(
-    access_token: str, prompt: str, *, apply: bool, context: PlanContext
-) -> AsyncGenerator[str, None]:
+async def _sse(body: PlanRequest) -> AsyncGenerator[str, None]:
     run_id = logs.new_run_id()
-    log.info("POST /plan/stream (apply=%s, prompt=%d chars)", apply, len(prompt))
+    prompt = _plan_prompt(body)
+    log.info("POST /plan/stream: %s", _request_summary(body, prompt))
     started = time.monotonic()
     counts: dict[str, int] = {}
     terminal: str | None = None
 
-    yield _frame({"type": "start", "apply": apply}, run_id)
+    yield _frame({"type": "start", "apply": body.apply}, run_id)
 
     try:
-        async with SilpoMCP(settings.mcp_url, access_token) as mcp:
+        async with SilpoMCP(settings.mcp_url, body.silpo_access_token) as mcp:
             agent = SilpoFitAgent(settings, mcp)
             await agent.prepare()
-            async for event in agent.run_stream(prompt, apply=apply, context=context):
+            async for event in agent.run_stream(
+                prompt, apply=body.apply, context=PlanContext.from_request(body)
+            ):
                 counts[event["type"]] = counts.get(event["type"], 0) + 1
                 if event["type"] in ("plan", "error"):
                     terminal = event["type"]
@@ -183,6 +174,42 @@ async def _sse(
             terminal or "none",
             counts,
         )
+
+
+def _request_summary(body: PlanRequest, prompt: str) -> str:
+    profile = body.profile
+    if body.previous_feedback:
+        history = (
+            f"feedback({len(body.previous_feedback.products)} products, "
+            f"{len(body.previous_feedback.dishes)} dishes)"
+        )
+    elif body.previous_plan:
+        history = f"plan({len(body.previous_plan.get('cart') or [])} cart items)"
+    else:
+        history = "none"
+
+    fields = (
+        ("apply", body.apply),
+        ("budget_uah", body.budget_uah),
+        ("delivery_included", body.delivery_included),
+        ("promo_priority", body.promo_priority),
+        ("goal", body.goal or "derived"),
+        ("weekly_pace_kg", body.weekly_pace_kg),
+        ("weight_kg", f"{profile.weight_kg:g}->{profile.target_weight_kg:g}"),
+        ("height_cm", profile.height_cm or "?"),
+        ("age", profile.age or "?"),
+        ("sex", profile.sex or "?"),
+        ("workouts_per_week", body.workouts_per_week),
+        ("workout_schedule", ",".join(sorted(body.workout_schedule)) or "none"),
+        ("diet_type", body.diet_type),
+        ("allergens", "/".join(body.allergens) or "none"),
+        ("excluded", "/".join(body.excluded_products) or "none"),
+        ("fridge", "/".join(body.fridge_items) or "none"),
+        ("note", logs.preview(body.note, 200) or "none"),
+        ("history", history),
+        ("prompt_chars", len(prompt)),
+    )
+    return " ".join(f"{name}={value}" for name, value in fields)
 
 
 def _frame(event: dict[str, Any], run_id: str) -> str:

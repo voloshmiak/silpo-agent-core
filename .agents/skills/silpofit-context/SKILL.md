@@ -376,6 +376,14 @@ onboarding labels («КЕТО», «Схуднення») onto identifiers and ra
 unmatched, rather than falling back to a default — a silently dropped allergen is far
 more expensive than a wiring-time error.
 
+**Every run opens by logging the request it was handed.** `server._request_summary`
+prints one INFO line per `/plan` and `/plan/stream` with every field that shapes the
+plan — budget, goal, pace, weights, workouts and their days, diet, allergens, excluded
+products, fridge, note, and what kind of history arrived — as the values look **after**
+`request_schema` normalisation, so the line shows what the agent understood, not what
+was posted. It exists to settle "the backend sent X" arguments in one grep instead of
+two repos. `silpo_access_token` is never in it, and never should be.
+
 **Every log line carries a run id**, and every SSE frame carries the same id, so a
 frontend error report maps onto exact log lines. Logs go to **stdout** (Cloud Run
 marks stderr as errors). `SILPOFIT_LOG_LEVEL=DEBUG` adds the full prompt and every
