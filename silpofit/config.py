@@ -5,11 +5,8 @@ from dotenv import load_dotenv
 
 MCP_URL = "https://mcp.silpo.ua/mcp"
 MODEL = "gemini-3.5-flash-lite"
-
 THINKING_LEVEL = "MEDIUM"
-
-MAX_STEPS = 60
-
+MAX_STEPS = 75
 VALIDATION_ROUNDS = 2
 
 @dataclass
@@ -20,8 +17,8 @@ class Settings:
     mcp_url: str = MCP_URL
     max_steps: int = MAX_STEPS
     validation_rounds: int = VALIDATION_ROUNDS
-    validator_model: str = ""
-    validator_thinking_level: str = ""
+    validator_model: str = MODEL
+    validator_thinking_level: str = THINKING_LEVEL
     service_tokens: frozenset[str] = field(default_factory=frozenset)
 
     @property
