@@ -1,6 +1,8 @@
 """Deterministic helpers the model calls instead of doing arithmetic itself."""
 
 from typing import Any
+import httpx
+
 
 ACTIVITY_FACTORS = {
     "sedentary": 1.2,
@@ -116,6 +118,55 @@ def check_budget(items: list[dict[str, Any]], budget_uah: float) -> dict[str, An
     }
 
 
+def search_silpo_recipes(query: str = "") -> list[dict[str, Any]]:
+    """Search recipes from API"""
+    url = "https://sf-ecom-api.silpo.ua/v1/recipes?limit=12&offset=0"
+    headers = {
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "origin": "https://silpo.ua"
+    }
+
+    try:
+        with httpx.Client() as client:
+            response = client.get(url, headers=headers, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+
+        raw_recipes = data.get("items", [])
+        results = []
+
+        for r in raw_recipes:
+            title = r.get("title")
+            slug = r.get("slug")
+            time = r.get("cookingTime", 0)
+
+            # Витягуємо інгредієнти
+            ingredients = []
+            for ing in r.get("ingredients", []):
+                name = ing.get("name", "")
+                measure = ing.get("measure", {})
+                qty = measure.get("quantity", "")
+                unit = measure.get("unit", "")
+                ingredients.append(f"{name} ({qty} {unit})".strip())
+
+            if title and slug:
+                results.append({
+                    "title": title,
+                    "time_minutes": time,
+                    "link": f"https://silpo.ua/recipes/{slug}",
+                    "ingredients": ingredients
+                })
+
+        if query:
+            q = query.lower()
+            results = [r for r in results if q in r["title"].lower()]
+
+        return results[:8]
+    except Exception as e:
+        print(f"[API Recipe Error] {e}")
+        return []
+
 DECLARATIONS = [
     {
         "type": "function",
@@ -195,10 +246,26 @@ DECLARATIONS = [
             "required": ["items", "budget_uah"],
         },
     },
+    {
+        "type": "function",
+        "name": "search_silpo_recipes",
+        "description": "Searches for real recipes in the Silpo database. Returns the title, cooking time, link, and a list of ingredients. Always use this to create the menu and add the correct products to the cart.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search keyword (e.g., 'salad', 'soup', 'dessert'). Leave empty to fetch a general list."
+                }
+            }
+        }
+    }
+
 ]
 
 HANDLERS = {
     "calc_targets": calc_targets,
     "check_nutrition": check_nutrition,
     "check_budget": check_budget,
+    "search_silpo_recipes": search_silpo_recipes,
 }
