@@ -187,6 +187,17 @@ was right. Nothing that reads only the plan can catch this class. It fails open 
 an error result, a payload with no `shipments` and no `calculation` — because a parse
 mismatch here would reject every plan forever.
 
+**The meals are the truth, the day total is derived — and the audit must say so in one
+breath.** `_audit_days` compares the *sum of the four meals* against `targets`, never the
+`kcal` the model wrote on the day, and when both are wrong it emits **one** issue naming
+the meal sum and asking for the portions to change. The earlier version emitted two
+independent issues ("the total does not equal the meals" and "the day is off target")
+and a real run ping-ponged between them for seven rounds: the model copied the meal sum
+into the total, which broke the target check, then wrote the target into the total,
+which broke the sum check, and shipped 2650 kcal against a 2272 target with the rounds
+spent. Two individually correct checks can still spell out contradictory instructions —
+whenever two checks constrain the same number, one of them must own the fix.
+
 **The two kinds of rejection have separate budgets, on purpose.** `audit` issues
 get `SILPOFIT_VALIDATION_ROUNDS + AUDIT_EXTRA_ROUNDS` (3 + 2) attempts, `review`
 issues only `SILPOFIT_VALIDATION_ROUNDS`; the counters in `agent._rounds_used` are
@@ -195,6 +206,14 @@ This exists because of a real run: two content rounds burned the whole budget, t
 model then fixed the content and broke the money, and a one-line arithmetic error
 shipped with no attempts left. A deterministic issue is cheap to detect, always
 fixable without re-shopping, and must never be starved by the expensive review.
+
+**`note` carries requests, not decoration.** The user's free text is the only channel
+for "I like marshmallows" or "no fish on Fridays", and a run shipped ignoring exactly
+such a line. `build_plan_prompt` now marks it as instructions to honour, and the
+reviewer's rule 8 requires every explicit wish to be either in the plan or explained in
+`summary.notes` — silently dropping one is a violation. `calc_targets` likewise hints
+when `goal` contradicts the weights (a request to *lose* toward a heavier target), since
+that mis-set field silently inverts every calorie number downstream.
 
 **Two independent credentials.** The `Authorization: Bearer` header authenticates
 the *calling backend* (`SILPOFIT_SERVICE_TOKENS`, comma-separated). The *end user's*
@@ -245,7 +264,11 @@ it, never the label. Silpo returns `displayRatio`/`ratio` as display context onl
 `price: 308.58`, `total: 802.31` — that is 2.6 **kg** at 308.58/kg, not 260 g. For
 `weighted: false` the quantity counts packages and `displayRatio` («500г», «10шт»,
 «5*80г») says what one contains. Both the prompt and any future check must use
-`weighted`, not the string, or they will be confidently wrong in units of ten.
+`weighted`, not the string, or they will be confidently wrong in units of ten. The
+reviewing model got this wrong twice — once advising "raise it to 9 units of 100 g",
+which the planner faithfully turned into **9 kilograms** of apples for a week that needed
+840 g — so `REVIEW_INSTRUCTION` now states the rule and forbids deriving a quantity from
+the unit label.
 
 **Product search is capped to a few results per query.** `silpo_find_products_batch`
 defaults to **30 matches per search term** and the model never passes `limit`, so a

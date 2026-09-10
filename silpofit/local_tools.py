@@ -55,6 +55,17 @@ def calc_targets(
     tdee = bmr * ACTIVITY_FACTORS[activity]
 
     pace = abs(float(weekly_pace_kg or 0.0))
+    hints: list[str] = []
+    if target_weight_kg is not None:
+        wrong_way = (goal == "lose" and target_weight_kg > weight_kg) or (
+            goal == "gain" and target_weight_kg < weight_kg
+        )
+        if wrong_way:
+            hints.append(
+                f"goal '{goal}' contradicts the weights ({weight_kg} kg now, {target_weight_kg} kg "
+                "wanted): the calories below move the user the wrong way. Check the goal in the "
+                "user message and call calc_targets again with the right one."
+            )
     hint = ""
     if pace and goal in ("lose", "gain"):
         shift = pace * KCAL_PER_KG / 7
@@ -98,7 +109,9 @@ def calc_targets(
         "estimated_goal_date": goal_date,
     }
     if hint:
-        result["hint"] = hint
+        hints.append(hint)
+    if hints:
+        result["hint"] = " ".join(hints)
     return result
 
 

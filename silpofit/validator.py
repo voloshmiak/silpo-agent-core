@@ -478,43 +478,55 @@ def _audit_days(
 
         day_kcal = _num(day.get("kcal"))
         meals_kcal = sum(_num(meal.get("kcal")) for meal in meals)
-        if meals_kcal and abs(day_kcal - meals_kcal) > max(50.0, meals_kcal * MEAL_SUM_TOLERANCE):
+        true_kcal = meals_kcal or day_kcal
+        kcal_mismatch = bool(meals_kcal) and abs(day_kcal - meals_kcal) > max(
+            50.0, meals_kcal * MEAL_SUM_TOLERANCE
+        )
+        if target_kcal and true_kcal and abs(true_kcal / target_kcal - 1) > DAY_KCAL_TOLERANCE:
+            issues.append(
+                Issue(
+                    f"days.{key}",
+                    f"чотири прийоми їжі дають {round(true_kcal)} ккал проти денної норми "
+                    f"{round(target_kcal)} ккал"
+                    + (f", а в полі kcal стоїть {round(day_kcal)}" if kcal_mismatch else ""),
+                    f"зміни грамування страв так, щоб сума чотирьох прийомів їжі вийшла "
+                    f"близько {round(target_kcal)} ккал, і аж тоді постав цю саму суму в "
+                    "денний kcal. Перевіряється сума страв, тож правити лише підсумок марно",
+                )
+            )
+        elif kcal_mismatch:
             issues.append(
                 Issue(
                     f"days.{key}",
                     f"денний підсумок {round(day_kcal)} ккал не дорівнює сумі чотирьох прийомів "
                     f"їжі ({round(meals_kcal)} ккал)",
-                    "порахуй денні підсумки через sum_macros на чотирьох прийомах їжі цього дня "
-                    "і постав саме їх",
+                    "постав у kcal суму чотирьох прийомів їжі — порахуй її через sum_macros",
                 )
             )
 
         day_protein = _num(day.get("protein_g"))
         meals_protein = sum(_num(meal.get("protein_g")) for meal in meals)
-        if meals_protein and abs(day_protein - meals_protein) > max(10.0, meals_protein * 0.1):
+        true_protein = meals_protein or day_protein
+        protein_mismatch = bool(meals_protein) and abs(day_protein - meals_protein) > max(
+            10.0, meals_protein * 0.1
+        )
+        if target_protein and true_protein < target_protein * DAY_PROTEIN_FLOOR:
+            issues.append(
+                Issue(
+                    f"days.{key}",
+                    f"у чотирьох прийомах їжі {round(true_protein)} г білка при нормі "
+                    f"{round(target_protein)} г",
+                    "додай білка у самі страви цього дня, не збільшуючи ккал понад норму, "
+                    "і постав у protein_g нову суму страв",
+                )
+            )
+        elif protein_mismatch:
             issues.append(
                 Issue(
                     f"days.{key}",
                     f"білок за день {round(day_protein)} г не дорівнює сумі прийомів їжі "
                     f"({round(meals_protein)} г)",
-                    "порахуй денні підсумки через sum_macros і постав саме їх",
-                )
-            )
-
-        if target_kcal and abs(day_kcal / target_kcal - 1) > DAY_KCAL_TOLERANCE:
-            issues.append(
-                Issue(
-                    f"days.{key}",
-                    f"{round(day_kcal)} ккал проти денної норми {round(target_kcal)} ккал",
-                    "приведи раціон цього дня до норми — зміни порції, а не саму норму",
-                )
-            )
-        if target_protein and day_protein < target_protein * DAY_PROTEIN_FLOOR:
-            issues.append(
-                Issue(
-                    f"days.{key}",
-                    f"білка {round(day_protein)} г при нормі {round(target_protein)} г",
-                    "додай білкових продуктів у цей день, не збільшуючи ккал понад норму",
+                    "постав у protein_g суму чотирьох прийомів їжі — порахуй її через sum_macros",
                 )
             )
 
