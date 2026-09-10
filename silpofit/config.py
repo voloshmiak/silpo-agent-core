@@ -8,6 +8,7 @@ MODEL = "gemini-3.5-flash-lite"
 THINKING_LEVEL = "MEDIUM"
 MAX_STEPS = 75
 VALIDATION_ROUNDS = 2
+VALIDATION_MODEL = "gemini-3.8-flash"
 
 @dataclass
 class Settings:
@@ -17,7 +18,7 @@ class Settings:
     mcp_url: str = MCP_URL
     max_steps: int = MAX_STEPS
     validation_rounds: int = VALIDATION_ROUNDS
-    validator_model: str = MODEL
+    validator_model: str = VALIDATION_MODEL
     validator_thinking_level: str = THINKING_LEVEL
     service_tokens: frozenset[str] = field(default_factory=frozenset)
 
