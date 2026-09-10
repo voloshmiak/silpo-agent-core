@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -5,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pydantic import BaseModel, Field
 
 from . import prompts
@@ -16,6 +17,12 @@ from .request_schema import PlanRequest
 log = logging.getLogger(__name__)
 
 MEALS = ("breakfast", "lunch", "snack", "dinner")
+
+STORE_CONTEXT_TOOLS = ("silpo_get_shopping_cart_by_id",)
+PRODUCT_TOOLS = ("silpo_find_products_batch", "silpo_get_products", "silpo_get_product_details")
+CART_WRITE_TOOLS = ("silpo_add_or_update_cart_products",)
+
+RATE_LIMIT_RETRIES = 2
 
 MAX_ISSUES = 10
 
@@ -82,6 +89,47 @@ class Review(BaseModel):
     issues: list[ReviewIssue] = Field(
         default_factory=list, description="Порушення, які треба виправити; порожньо, якщо ok"
     )
+
+
+def check_grounding(succeeded: set[str], plan: dict[str, Any], apply: bool) -> list[Issue]:
+    issues: list[Issue] = []
+    cart = plan.get("cart") or []
+
+    if not any(tool in succeeded for tool in STORE_CONTEXT_TOOLS):
+        issues.append(
+            Issue(
+                "plan",
+                "план зібраний без контексту магазину: жоден виклик "
+                "silpo_get_shopping_cart_by_id за цей ран не пройшов успішно",
+                "виконай крок 1: silpo_get_my_shopping_cart, потім "
+                "silpo_get_shopping_cart_by_id, і візьми звідти branchId, deliveryType і "
+                "таймслот. Без них пошук товарів повертає нуль результатів",
+            )
+        )
+
+    if cart and not any(tool in succeeded for tool in PRODUCT_TOOLS):
+        issues.append(
+            Issue(
+                "cart",
+                "жодного пошуку товарів за цей ран не було, тож товари в кошику взяті не з "
+                "«Сільпо» — найімовірніше переписані з минулого плану",
+                "знайди кожен товар заново через silpo_find_products_batch і візьми ціну, "
+                "slug та image_url з відповіді. Минулий план — це підказка про смаки, а не "
+                "джерело товарів і цін",
+            )
+        )
+
+    if apply and cart and not any(tool in succeeded for tool in CART_WRITE_TOOLS):
+        issues.append(
+            Issue(
+                "cart",
+                "кошик користувача не заповнений: жоден silpo_add_or_update_cart_products "
+                "не пройшов успішно, а ран іде в режимі реального замовлення",
+                "додай товари через silpo_add_or_update_cart_products, перечитай кошик через "
+                "silpo_get_shopping_cart_by_id і візьми фінальні числа звідти",
+            )
+        )
+    return issues
 
 
 def audit(plan: dict[str, Any], context: PlanContext) -> list[Issue]:
@@ -383,22 +431,40 @@ class PlanValidator:
         self, plan: dict[str, Any], context: PlanContext, user_input: str
     ) -> list[Issue]:
         started = time.monotonic()
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=self._settings.review_model,
-                contents=_review_prompt(plan, context, user_input),
-                config=types.GenerateContentConfig(
-                    system_instruction=prompts.REVIEW_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=Review,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=self._settings.review_thinking_level
-                    ),
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                ),
-            )
-        except Exception:
-            log.exception("plan review call failed — accepting the plan without a review")
+        config = types.GenerateContentConfig(
+            system_instruction=prompts.REVIEW_INSTRUCTION,
+            response_mime_type="application/json",
+            response_schema=Review,
+            thinking_config=types.ThinkingConfig(
+                thinking_level=self._settings.review_thinking_level
+            ),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        contents = _review_prompt(plan, context, user_input)
+
+        response = None
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=self._settings.review_model, contents=contents, config=config
+                )
+                break
+            except errors.ClientError as exc:
+                if exc.code != 429 or attempt == RATE_LIMIT_RETRIES:
+                    log.exception("plan review call failed — accepting the plan without a review")
+                    return []
+                delay = 2**attempt
+                log.warning(
+                    "plan review rate limited, retrying in %.0fs (%d/%d)",
+                    delay,
+                    attempt + 1,
+                    RATE_LIMIT_RETRIES,
+                )
+                await asyncio.sleep(delay)
+            except Exception:
+                log.exception("plan review call failed — accepting the plan without a review")
+                return []
+        if response is None:
             return []
 
         review = _parse_review(response)

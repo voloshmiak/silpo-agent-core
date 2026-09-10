@@ -14,7 +14,7 @@ from .config import Settings
 from .logs import preview
 from .mcp_client import SilpoMCP
 from .tool_bridge import MUTATING_TOOLS, select_tools
-from .validator import Issue, PlanContext, PlanValidator, format_issues
+from .validator import Issue, PlanContext, PlanValidator, check_grounding, format_issues
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ class SilpoFitAgent:
         self._user_input = ""
         self._validations = 0
         self._rounds_used: dict[str, int] = {"audit": 0, "review": 0}
+        self._mcp_ok: set[str] = set()
         self._pending: list[dict[str, Any]] = []
 
     async def prepare(self) -> None:
@@ -105,6 +106,7 @@ class SilpoFitAgent:
         self._user_input = user_input
         self._validations = 0
         self._rounds_used = {"audit": 0, "review": 0}
+        self._mcp_ok = set()
         self._pending = []
 
         system_instruction = prompts.SYSTEM_INSTRUCTION
@@ -180,6 +182,9 @@ class SilpoFitAgent:
                         len(result_text),
                     )
                     log.debug("step %d <- %s result: %s", step_number, call.name, preview(result_text, 1000))
+
+                if not is_error and call.name in self._mcp_tool_names:
+                    self._mcp_ok.add(call.name)
 
                 yield _event("tool_result", tool=call.name, ok=not is_error, result=_truncate(result_text))
                 while self._pending:
@@ -327,7 +332,15 @@ class SilpoFitAgent:
         if limit <= 0:
             return []
 
-        issues = await self._validator.check(plan, self._context, self._user_input)
+        issues = check_grounding(self._mcp_ok, plan, self._apply)
+        if issues:
+            log.warning(
+                "plan is not grounded in tool calls: %d issue(s), successful Silpo calls: %s",
+                len(issues),
+                ", ".join(sorted(self._mcp_ok)) or "none",
+            )
+        else:
+            issues = await self._validator.check(plan, self._context, self._user_input)
         self._validations += 1
 
         source = issues[0].source if issues else ""

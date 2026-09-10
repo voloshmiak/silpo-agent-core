@@ -157,6 +157,19 @@ unresolved, logged at ERROR and streamed as `validation` with
 `accepted: true, ok: false`. Both are better than a run that never terminates.
 Each round costs a model turn from `MAX_STEPS` plus 15–30s of review.
 
+**A plan that no tool call produced is rejected before either check runs.**
+`agent._mcp_ok` collects the Silpo tools that came back *successfully*, and
+`validator.check_grounding` refuses a `finalize_plan` when the run never got store
+context (`silpo_get_shopping_cart_by_id`), never searched products while filling a
+cart, or — under `apply=true` — never wrote the cart. This exists because of an
+observed run: with a 115k-character `previous_plan` in the prompt, the model called
+`finalize_plan` as its **first and only** tool call and copied last week's cart
+wholesale. Slugs and image URLs validated (they were real, just stale), every number
+was internally consistent, and the reviewer returned `ok: true` — correctly, because
+nothing inside the plan was wrong. Neither the audit nor the review can see this
+class: they judge the artifact, and the artifact was fine. Only the run's own history
+knows the plan was never grounded, so the gate reads that instead.
+
 **The two kinds of rejection have separate budgets, on purpose.** `audit` issues
 get `SILPOFIT_VALIDATION_ROUNDS + AUDIT_EXTRA_ROUNDS` (3 + 2) attempts, `review`
 issues only `SILPOFIT_VALIDATION_ROUNDS`; the counters in `agent._rounds_used` are
@@ -196,6 +209,16 @@ Without them product search silently returns **zero results** — which reads li
 against `IMAGE_HOST`. The product page URL is *derived* from the slug, never written
 by the model. `total_price` is cross-checked against `price × quantity` to catch a
 unit price used as a line total.
+
+**`Plan.cart` has a floor of 3 items**, and the floor is declared in the schema, not
+only enforced after the fact. A week's ration cannot come from two products, and an
+empty or near-empty cart used to validate cleanly and ship as a 200.
+Which is why `sanitize_schema` keeps both the snake_case field names of
+`types.JSONSchema` **and their camelCase aliases**: Pydantic emits `minItems`,
+`maxItems`, `minLength`, and the old filter — built from `model_fields` alone — threw
+every one of them away. The API accepts them; dropping them meant Gemini learned
+«exactly 7 days» and «at least 3 cart items» only from rejection messages instead of
+from the tool schema.
 
 **No nullable fields in `plan_schema`.** Gemini handles `anyOf` with `type: "null"`
 poorly, so every optional field gets an empty default and `_Model._drop_nulls`

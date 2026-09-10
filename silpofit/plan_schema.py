@@ -153,7 +153,10 @@ class Plan(_Model):
         min_length=7,
         max_length=7,
     )
-    cart: list[CartItem] = Field(description="Фінальний кошик товарів")
+    cart: list[CartItem] = Field(
+        description="Фінальний кошик товарів — щонайменше 3 позиції, знайдені через пошук",
+        min_length=3,
+    )
     summary: Summary
 
     @field_validator("days", mode="after")

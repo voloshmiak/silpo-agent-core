@@ -104,7 +104,7 @@ still reads as a type error.
       "lunch":     { … }, "snack": { … }, "dinner": { … }
     }
   ],
-  "cart": [
+  "cart": [                                              // at least 3 items — a shorter cart is rejected
     {
       "name": "Банан", "product_id": "…",
       "slug": "banan-32485",                              // must end in the article number
@@ -156,7 +156,8 @@ dropped before validation (`_Model._drop_nulls`), so optional fields default to
 * **discounts** — `silpo_get_promotions`, `silpo_get_my_promos`,
   `silpo_get_my_coupons`
 * **cart context** — `silpo_get_my_shopping_cart`, `silpo_get_shopping_cart_by_id`,
-  `silpo_get_available_delivery_types`, `silpo_get_time_slots`
+  `silpo_get_my_delivery_addresses`, `silpo_get_available_delivery_types`,
+  `silpo_get_time_slots`, `silpo_create_shopping_cart` (not gated by `apply` — see SKILL.md)
 * **cart writes (gated by `apply`)** — `silpo_add_or_update_cart_products`,
   `silpo_remove_cart_products`, `silpo_clear_shopping_cart`
 * **history** — `silpo_get_my_online_orders`, `silpo_get_my_offline_orders`,

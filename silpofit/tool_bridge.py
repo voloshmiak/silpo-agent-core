@@ -45,14 +45,20 @@ _SCHEMA_LIST_FIELDS = ("anyOf", "oneOf")
 _SCHEMA_DICT_FIELDS = ("properties", "$defs")
 
 
+def _supported_keys() -> set[str]:
+    keys: set[str] = set()
+    for name, info in types.JSONSchema.model_fields.items():
+        keys.add(name)
+        if info.alias:
+            keys.add(info.alias)
+    return keys
+
+
+SUPPORTED_KEYS = _supported_keys()
+
+
 def sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    supported = set(types.JSONSchema.model_fields) | {
-        "additionalProperties",
-        "anyOf",
-        "oneOf",
-        "$defs",
-        "$ref",
-    }
+    supported = SUPPORTED_KEYS
     out: dict[str, Any] = {}
     for key, value in schema.items():
         if key in _SCHEMA_FIELDS and isinstance(value, dict):
