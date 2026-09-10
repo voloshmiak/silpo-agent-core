@@ -119,7 +119,19 @@ def calc_targets(
 
 def check_nutrition(items: list[dict[str, Any]], daily_kcal: int, days: int = 7) -> dict[str, Any]:
     totals = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carbs_g": 0.0}
+    short: list[dict[str, Any]] = []
     for item in items:
+        eaten = float(item.get("total_grams", 0) or 0)
+        bought = float(item.get("bought_grams", 0) or 0)
+        if eaten and bought and bought < eaten * 0.98:
+            short.append(
+                {
+                    "name": item.get("name", "?"),
+                    "eaten_grams": round(eaten),
+                    "bought_grams": round(bought),
+                    "missing_grams": round(eaten - bought),
+                }
+            )
         portions = float(item.get("total_grams", 0)) / 100 or float(item.get("quantity", 1))
         for key, source in (
             ("kcal", "kcal_per_100g"),
@@ -139,9 +151,20 @@ def check_nutrition(items: list[dict[str, Any]], daily_kcal: int, days: int = 7)
         "avg_daily_kcal": round(totals["kcal"] / days) if days else 0,
         "avg_daily_protein_g": round(totals["protein_g"] / days) if days else 0,
     }
-    hint = _coverage_hint(covered, days)
-    if hint:
-        result["hint"] = hint
+    hints = [h for h in (_coverage_hint(covered, days),) if h]
+    if short:
+        result["not_enough_bought"] = short
+        listed = "; ".join(
+            f"{row['name']}: {row['bought_grams']} g bought vs {row['eaten_grams']} g eaten"
+            for row in short
+        )
+        hints.append(
+            f"{len(short)} product(s) run out before the week does — {listed}. Either raise the "
+            "quantity in the cart or cut the portions in the meals so they fit what is bought; "
+            "a ration that eats more than the cart holds is the single most common defect here."
+        )
+    if hints:
+        result["hint"] = " ".join(hints)
     return result
 
 
@@ -333,7 +356,8 @@ DECLARATIONS = [
         "name": "check_nutrition",
         "description": (
             "Sums calories and macros of the chosen products over the week and compares "
-            "them with the daily calorie target."
+            "them with the daily calorie target. Pass bought_grams alongside total_grams and "
+            "it also reports every product the ration eats more of than the cart holds."
         ),
         "parameters": {
             "type": "object",
@@ -348,6 +372,15 @@ DECLARATIONS = [
                             "total_grams": {
                                 "type": "number",
                                 "description": "Grams of this product across the whole ration (all `days` days)",
+                            },
+                            "bought_grams": {
+                                "type": "number",
+                                "description": (
+                                    "Grams of this product actually in the cart — pack size times "
+                                    "quantity, or kilograms times 1000 for a weighted product. "
+                                    "Pass it and the tool tells you which products run out before "
+                                    "the week does."
+                                ),
                             },
                             "quantity": {
                                 "type": "number",

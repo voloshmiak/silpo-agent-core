@@ -21,6 +21,7 @@ MEALS = ("breakfast", "lunch", "snack", "dinner")
 STORE_CONTEXT_TOOLS = ("silpo_get_shopping_cart_by_id",)
 PRODUCT_TOOLS = ("silpo_find_products_batch", "silpo_get_product_details")
 CART_WRITE_TOOLS = ("silpo_add_or_update_cart_products",)
+REQUIRED_CHECKS = ("check_budget", "check_plan_days")
 
 RATE_LIMIT_RETRIES = 2
 
@@ -276,6 +277,20 @@ def check_grounding(succeeded: set[str], plan: dict[str, Any], apply: bool) -> l
                 "знайди кожен товар заново через silpo_find_products_batch і візьми ціну, "
                 "slug та image_url з відповіді. Минулий план — це підказка про смаки, а не "
                 "джерело товарів і цін",
+            )
+        )
+
+    missing = [tool for tool in REQUIRED_CHECKS if tool not in succeeded]
+    if missing:
+        issues.append(
+            Issue(
+                "plan",
+                f"обовʼязкові перевірки не виконані: {', '.join(missing)} за цей ран не "
+                "викликались жодного разу",
+                "виклич їх перед finalize_plan: check_budget із позиціями кошика і бюджетом, "
+                "check_plan_days з підсумками всіх семи днів. Це не формальність — вони "
+                "рахують те, що ти інакше рахуєш подумки, і повертають підказки, яких ти "
+                "інакше не побачиш",
             )
         )
 

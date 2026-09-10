@@ -64,7 +64,7 @@ class SilpoFitAgent:
         self._user_input = ""
         self._validations = 0
         self._rounds_used: dict[str, int] = {"audit": 0, "review": 0}
-        self._mcp_ok: set[str] = set()
+        self._tools_ok: set[str] = set()
         self._cart_id = ""
         self._pending: list[dict[str, Any]] = []
 
@@ -116,7 +116,7 @@ class SilpoFitAgent:
         self._user_input = user_input
         self._validations = 0
         self._rounds_used = {"audit": 0, "review": 0}
-        self._mcp_ok = set()
+        self._tools_ok = set()
         self._cart_id = ""
         self._pending = []
 
@@ -220,8 +220,8 @@ class SilpoFitAgent:
                     )
                     log.debug("step %d <- %s result: %s", step_number, call.name, preview(result_text, 1000))
 
-                if not is_error and call.name in self._mcp_tool_names:
-                    self._mcp_ok.add(call.name)
+                if not is_error:
+                    self._tools_ok.add(call.name)
                     cart_id = arguments.get("shoppingCartId")
                     if isinstance(cart_id, str) and cart_id:
                         self._cart_id = cart_id
@@ -372,12 +372,12 @@ class SilpoFitAgent:
         if limit <= 0:
             return []
 
-        issues = check_grounding(self._mcp_ok, plan, self._apply)
+        issues = check_grounding(self._tools_ok, plan, self._apply)
         if issues:
             log.warning(
                 "plan is not grounded in tool calls: %d issue(s), successful Silpo calls: %s",
                 len(issues),
-                ", ".join(sorted(self._mcp_ok)) or "none",
+                ", ".join(sorted(self._tools_ok)) or "none",
             )
         else:
             issues = await self._cart_issues(plan) or await self._validator.check(

@@ -158,6 +158,14 @@ unresolved, logged at ERROR and streamed as `validation` with
 `accepted: true, ok: false`. Both are better than a run that never terminates.
 Each round costs a model turn from `MAX_STEPS` plus 15–30s of review.
 
+**The pipeline's own checks are mandatory, because the model skips them.** `check_budget`
+and `check_plan_days` are in `validator.REQUIRED_CHECKS`, and `finalize_plan` is refused
+when a run never called them. This is not pedantry: one observed run went search → cart
+→ finalize, skipping steps 7 and 9 entirely, so the budget-utilisation hint never fired
+and the reviewer had to find by hand, over two rounds and 35 seconds, what a local tool
+computes in zero. `agent._tools_ok` therefore records **every** successfully called tool,
+local ones included, not just the MCP names.
+
 **A plan that no tool call produced is rejected before either check runs.**
 `agent._mcp_ok` collects the Silpo tools that came back *successfully*, and
 `validator.check_grounding` refuses a `finalize_plan` when the run never got store
@@ -371,6 +379,15 @@ choosing products*, before the plan is locked; the reviewer's rule 8 then catche
 case that is unambiguously wrong — the same dish on six or seven days while a third of
 the budget sits unspent. Observed runs spent 1938 and 2452 UAH of a 10000 budget with
 eight identical-ish products, which is what the old ceiling-only wording asked for.
+
+**"The cart runs out before the week does" is arithmetic, so it lives in a tool.**
+`check_nutrition` takes `bought_grams` next to `total_grams` and returns
+`not_enough_bought` — every product the ration eats more of than the cart holds. It was
+the reviewer's most frequent finding by far (almonds, tofu, walnuts, apples, chicken,
+cucumbers, eggs, milk, pasta, across nearly every run), costing 15–25 s a round and
+often two rounds. The model already supplies both numbers when answering that review;
+asking for them up front turns the finding into a zero-cost tool result. Omitting
+`bought_grams` keeps the old behaviour, so the field is safe to leave out.
 
 **Arithmetic is a tool, not a model job.** `calc_targets`, `sum_macros`,
 `check_nutrition`, `check_budget` and `check_plan_days` exist so the numbers are
